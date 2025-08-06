@@ -52,3 +52,7 @@ def ask(query):
 gr.Interface(fn=ask, inputs="text", outputs="text", title="Trợ lý Y tế AI").launch(
     server_name="0.0.0.0", server_port=10000
 )
+import os
+
+port = int(os.environ.get("PORT", 10000))  # mặc định 10000 nếu biến môi trường PORT không tồn tại
+app.run(host='0.0.0.0', port=port)
