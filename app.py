@@ -24,16 +24,13 @@ for file in os.listdir("data"):
 
 splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 chunks = splitter.split_documents(docs)
-
 embedding = OpenAIEmbeddings()
 vector_db = Chroma.from_documents(chunks, embedding, persist_directory="chroma_db")
 
 prompt = PromptTemplate(
     template="""
 Bạn là trợ lý y tế thông minh. Dưới đây là nội dung tài liệu Bộ Y tế:
-
 {context}
-
 Câu hỏi: {question}
 Hãy trả lời bằng tiếng Việt ngắn gọn, chính xác.
 """,
@@ -41,7 +38,11 @@ Hãy trả lời bằng tiếng Việt ngắn gọn, chính xác.
 )
 
 qa_chain = RetrievalQA.from_chain_type(
-    llm=ChatOpenAI(model_name="gpt-3.5-turbo"),
+    llm=ChatOpenAI(
+        model_name="gpt-3.5-turbo",
+        max_tokens=200000,  # <-- THÊM DÒNG NÀY
+        temperature=0.7     # Có thể thêm luôn
+    ),
     retriever=vector_db.as_retriever(),
     chain_type_kwargs={"prompt": prompt}
 )
