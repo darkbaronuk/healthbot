@@ -1,2 +1,9 @@
-flask
-gunicorn
+gradio
+langchain
+langchain-community
+langchain-openai
+openai
+chromadb
+unstructured[pdf]
+python-dotenv
+tiktoken
