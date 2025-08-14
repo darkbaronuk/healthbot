@@ -17,39 +17,61 @@ if not OPENAI_API_KEY:
 
 # Load và vector hóa tài liệu
 docs = []
-for file in os.listdir("data"):
-    if file.endswith(".pdf"):
-        loader = UnstructuredPDFLoader(os.path.join("data", file))
-        docs.extend(loader.load())
+data_folder = "data"
+if os.path.exists(data_folder):
+    for file in os.listdir(data_folder):
+        if file.endswith(".pdf"):
+            loader = UnstructuredPDFLoader(os.path.join(data_folder, file))
+            docs.extend(loader.load())
 
-splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-chunks = splitter.split_documents(docs)
-embedding = OpenAIEmbeddings()
-vector_db = Chroma.from_documents(chunks, embedding, persist_directory="chroma_db")
+if docs:
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = splitter.split_documents(docs)
+    embedding = OpenAIEmbeddings()
+    vector_db = Chroma.from_documents(chunks, embedding, persist_directory="chroma_db")
+    
+    prompt = PromptTemplate(
+        template="""
+    Bạn là trợ lý y tế thông minh. Dưới đây là nội dung tài liệu Bộ Y tế:
+    {context}
+    Câu hỏi: {question}
+    Hãy trả lời bằng tiếng Việt ngắn gọn, chính xác.
+    """,
+        input_variables=["context", "question"]
+    )
+    
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=ChatOpenAI(
+            model_name="gpt-4-turbo",
+            max_tokens=200000,
+            temperature=0.3
+        ),
+        retriever=vector_db.as_retriever(),
+        chain_type_kwargs={"prompt": prompt}
+    )
+    
+    def ask(query):
+        try:
+            return qa_chain.run(query)
+        except Exception as e:
+            return f"Lỗi: {str(e)}. Vui lòng thử câu hỏi ngắn hơn."
+else:
+    def ask(query):
+        return "Chưa có tài liệu PDF nào được tải lên."
 
-prompt = PromptTemplate(
-    template="""
-Bạn là trợ lý y tế thông minh. Dưới đây là nội dung tài liệu Bộ Y tế:
-{context}
-Câu hỏi: {question}
-Hãy trả lời bằng tiếng Việt ngắn gọn, chính xác.
-""",
-    input_variables=["context", "question"]
-)
+# Lấy port từ biến môi trường (Render tự động set)
+port = int(os.environ.get("PORT", 7860))
 
-qa_chain = RetrievalQA.from_chain_type(
-    llm=ChatOpenAI(
-        model_name="gpt-3.5-turbo",
-        max_tokens=200000,  # <-- THÊM DÒNG NÀY
-        temperature=0.7     # Có thể thêm luôn
-    ),
-    retriever=vector_db.as_retriever(),
-    chain_type_kwargs={"prompt": prompt}
-)
-
-def ask(query):
-    return qa_chain.run(query)
-
-gr.Interface(fn=ask, inputs="text", outputs="text", title="Trợ lý Y tế AI").launch(
-    server_name="0.0.0.0", server_port=10000
+# Launch app
+gr.Interface(
+    fn=ask, 
+    inputs=gr.Textbox(placeholder="Nhập câu hỏi y tế của bạn..."),
+    outputs=gr.Textbox(),
+    title="🏥 Trợ lý Y tế AI",
+    description="Hỏi đáp về y tế dựa trên tài liệu chính thức"
+).launch(
+    server_name="0.0.0.0",
+    server_port=port,
+    share=False,
+    show_error=True
 )
