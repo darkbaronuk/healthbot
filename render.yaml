@@ -1,9 +1,10 @@
 services:
   - type: web
-    name: medical-chatbot
+    name: medical-chatbot-gemini
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py
     envVars:
-      - key: OPENAI_API_KEY
+      - key: GOOGLE_API_KEY  # Đổi từ OPENAI_API_KEY
         sync: false
+    plan: free  # Gemini miễn phí nên có thể dùng plan free
