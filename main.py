@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
@@ -19,7 +18,6 @@ if not api_key:
 # 2. Tự động nạp toàn bộ PDF từ thư mục /data
 pdf_folder = "data"
 all_docs = []
-
 print(f"📂 Đang quét file PDF trong thư mục: {pdf_folder}")
 for filename in os.listdir(pdf_folder):
     if filename.endswith(".pdf"):
@@ -41,7 +39,6 @@ print(f"✂️ Đã chia thành {len(chunks)} đoạn văn bản.")
 # 4. Tạo vector database (Chroma)
 embedding = OpenAIEmbeddings()
 from tqdm import tqdm  # hiển thị tiến trình
-
 vector_db = Chroma(embedding_function=embedding, persist_directory="chroma_db")
 
 # Thêm từng batch nhỏ (vd: mỗi batch 50 đoạn)
@@ -57,9 +54,7 @@ print("✅ Đã lưu vector hóa vào thư mục chroma_db/")
 custom_prompt = PromptTemplate(
     template="""
 Bạn là trợ lý y tế thông minh. Hãy trả lời dựa trên hướng dẫn chính thức của Bộ Y tế Việt Nam.
-
 Dưới đây là các tài liệu tham khảo:
-
 {context}
 
 Câu hỏi: {question}
@@ -68,8 +63,13 @@ Trả lời bằng tiếng Việt, ngắn gọn, chính xác theo chuyên môn y
     input_variables=["context", "question"]
 )
 
-# 6. Tạo mô hình hỏi đáp
-llm = ChatOpenAI(model_name="gpt-4", temperature=0)
+# 6. Tạo mô hình hỏi đáp - SỬA Ở ĐÂY
+llm = ChatOpenAI(
+    model_name="gpt-4", 
+    temperature=0,
+    max_tokens=200000  # <-- THÊM DÒNG NÀY
+)
+
 retriever = vector_db.as_retriever(search_type="similarity", search_kwargs={"k": 4})
 
 qa_chain = RetrievalQA.from_chain_type(
@@ -79,13 +79,25 @@ qa_chain = RetrievalQA.from_chain_type(
     chain_type_kwargs={"prompt": custom_prompt}
 )
 
-# 7. Giao diện hỏi đáp cơ bản
+# 7. Giao diện hỏi đáp cơ bản với error handling
 print("\n🚑 Chatbot Y tế sẵn sàng! Gõ 'exit' để thoát.\n")
 while True:
     query = input("🧑 Bạn hỏi: ")
     if query.strip().lower() in ["exit", "quit", "thoát"]:
         break
-    result = qa_chain({"query": query})
-    print("\n🤖 Trợ lý y tế trả lời:\n", result["result"])
+    
+    try:
+        result = qa_chain({"query": query})
+        print("\n🤖 Trợ lý y tế trả lời:\n", result["result"])
+        
+        # Hiển thị nguồn tài liệu (optional)
+        print("\n📚 Nguồn tham khảo:")
+        for doc in result["source_documents"]:
+            print(f"- {doc.metadata.get('source_file', 'Unknown')}")
+            
+    except Exception as e:
+        print(f"\n❌ Lỗi: {str(e)}")
+        print("Vui lòng thử câu hỏi ngắn gọn hơn.")
+    
     print("-" * 60)
 
