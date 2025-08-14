@@ -2,8 +2,8 @@ gradio
 langchain
 langchain-community
 langchain-openai
-openai
-chromadb
-unstructured[pdf]
 python-dotenv
-tiktoken
+chromadb
+unstructured
+pdf2image
+pdfplumber
