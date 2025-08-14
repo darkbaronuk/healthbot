@@ -4,6 +4,7 @@ langchain-community
 langchain-openai
 python-dotenv
 chromadb
-unstructured
-pdf2image
+unstructured[pdf]
+pi-heif
 pdfplumber
+pypdf
