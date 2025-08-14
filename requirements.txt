@@ -1,8 +1,5 @@
 gradio
 langchain-google-genai
-langchain-community
 python-dotenv
-chromadb
 pypdf
-sentence-transformers
-tqdm
+gunicorn
