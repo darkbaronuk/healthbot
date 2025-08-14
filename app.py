@@ -48,11 +48,15 @@ qa_chain = RetrievalQA.from_chain_type(
 
 def ask(query):
     return qa_chain.run(query)
-
-gr.Interface(fn=ask, inputs="text", outputs="text", title="Trợ lý Y tế AI").launch(
-    server_name="0.0.0.0", server_port=10000
-)
+from flask import Flask
 import os
 
-port = int(os.environ.get("PORT", 10000))  # mặc định 10000 nếu biến môi trường PORT không tồn tại
-app.run(host='0.0.0.0', port=port)
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    return "Hello from Flask on Render!"
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))  # Render sẽ tự gán PORT
+    app.run(host='0.0.0.0', port=port)
