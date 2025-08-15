@@ -7,39 +7,41 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import shutil  # For cleaning ChromaDB
+import shutil
+import threading
+import time
 
-# Setup port cho Render - ĐỪNG TEST PORT BINDING
+# Setup port
 port = int(os.environ.get("PORT", 7860))
 print(f"🔍 ENV PORT: {os.environ.get('PORT', 'Not set')}")
 print(f"🔍 Using port: {port}")
-print(f"🔍 Python version: {sys.version}")
 
-# Bỏ port binding test - có thể gây conflict
-sys.stdout.flush()
-
-# Load biến môi trường
+# Load environment variables
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     print("❌ GOOGLE_API_KEY chưa được thiết lập!")
-    print("🔑 Vui lòng thêm GOOGLE_API_KEY vào Environment Variables")
-    GOOGLE_API_KEY = "dummy"  # Placeholder
+    GOOGLE_API_KEY = "dummy"
 
 print("🚀 Khởi động Medical Chatbot với Google Gemini...")
 
 # Global variables
 qa_chain = None
 vector_db = None
+initialization_status = "⚙️ Đang khởi tạo..."
+system_ready = False
 
 def initialize_system():
     """Khởi tạo hệ thống AI"""
-    global qa_chain, vector_db
+    global qa_chain, vector_db, initialization_status, system_ready
+    
+    print("🔄 FORCE INIT: Starting system initialization...")
+    initialization_status = "📂 Đang quét thư mục PDF..."
     
     try:
-        # Clean old ChromaDB if exists (fix column error)
+        # Clean old ChromaDB
         chroma_path = "chroma_db"
         if os.path.exists(chroma_path):
             print("🧹 Cleaning old ChromaDB...")
@@ -49,6 +51,7 @@ def initialize_system():
         # Load documents
         docs = []
         data_folder = "data"
+        initialization_status = "📄 Đang tải PDF files..."
         
         if os.path.exists(data_folder):
             print(f"📂 Quét thư mục {data_folder}...")
@@ -70,10 +73,15 @@ def initialize_system():
                 print(f"✅ Tổng cộng: {len(docs)} trang từ {len(pdf_files)} file")
             else:
                 print(f"⚠️ Không có file PDF trong {data_folder}")
+                initialization_status = "⚠️ Không tìm thấy PDF files"
+                return False
         else:
             print(f"⚠️ Thư mục {data_folder} không tồn tại")
+            initialization_status = "⚠️ Thư mục data không tồn tại"
+            return False
         
         if docs and GOOGLE_API_KEY != "dummy":
+            initialization_status = "✂️ Đang chia nhỏ tài liệu..."
             print("✂️ Chia nhỏ tài liệu...")
             splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000, 
@@ -82,6 +90,7 @@ def initialize_system():
             chunks = splitter.split_documents(docs)
             print(f"✅ Chia thành {len(chunks)} đoạn")
             
+            initialization_status = "🔧 Đang tạo embeddings..."
             print("🔧 Tạo embeddings...")
             embedding = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
@@ -89,19 +98,22 @@ def initialize_system():
                 encode_kwargs={'normalize_embeddings': True}
             )
             
+            initialization_status = "💾 Đang tạo vector database..."
             print("💾 Tạo vector database...")
             try:
                 vector_db = Chroma.from_documents(
                     chunks, 
                     embedding, 
-                    persist_directory=None  # Use in-memory để tránh lỗi
+                    persist_directory=None
                 )
                 print("✅ Vector database created successfully")
             except Exception as e:
                 print(f"❌ ChromaDB error: {e}")
-                # Fallback to simple setup
-                vector_db = None
+                initialization_status = f"❌ Lỗi ChromaDB: {str(e)[:50]}..."
                 return False
+            
+            initialization_status = "🤖 Đang thiết lập Gemini AI..."
+            print("🤖 Thiết lập Gemini AI...")
             
             prompt = PromptTemplate(
                 template="""
@@ -122,7 +134,6 @@ TRẢ LỜI:""",
                 input_variables=["context", "question"]
             )
             
-            print("🤖 Thiết lập Gemini AI...")
             llm = ChatGoogleGenerativeAI(
                 model="gemini-1.5-pro",
                 google_api_key=GOOGLE_API_KEY,
@@ -141,21 +152,27 @@ TRẢ LỜI:""",
             )
             
             print("✅ Hệ thống AI đã sẵn sàng!")
+            initialization_status = "✅ Sẵn sàng trả lời câu hỏi!"
+            system_ready = True
             return True
         else:
             print("⚠️ Không có tài liệu hoặc API key không hợp lệ")
+            initialization_status = "⚠️ API key không hợp lệ"
             return False
             
     except Exception as e:
         print(f"❌ Lỗi khởi tạo hệ thống: {e}")
+        initialization_status = f"❌ Lỗi: {str(e)[:100]}..."
         import traceback
         traceback.print_exc()
         return False
 
 def ask_question(query):
     """Xử lý câu hỏi từ người dùng"""
+    global initialization_status, system_ready
+    
     if not query.strip():
-        return "❓ Vui lòng nhập câu hỏi."
+        return f"❓ Vui lòng nhập câu hỏi.\n\n📊 Trạng thái: {initialization_status}"
     
     if len(query) > 1000:
         return "📝 Câu hỏi quá dài. Vui lòng rút ngắn dưới 1000 ký tự."
@@ -163,8 +180,17 @@ def ask_question(query):
     if GOOGLE_API_KEY == "dummy":
         return "⚙️ Hệ thống chưa được cấu hình đúng. Vui lòng kiểm tra GOOGLE_API_KEY."
     
-    if not qa_chain:
-        return "🔧 Hệ thống AI chưa sẵn sàng. Vui lòng chờ khởi tạo hoặc kiểm tra tài liệu PDF."
+    if not system_ready or not qa_chain:
+        return f"""🔧 Hệ thống AI chưa sẵn sàng.
+
+📊 Trạng thái hiện tại: {initialization_status}
+
+💡 Vui lòng chờ 2-3 phút để system:
+   • Load file PDF (36 trang)
+   • Tạo vector database 
+   • Khởi tạo AI model
+
+🔄 Thử lại sau ít phút..."""
     
     try:
         print(f"🔍 Xử lý câu hỏi: {query[:50]}...")
@@ -196,7 +222,7 @@ def ask_question(query):
         else:
             return f"❌ Lỗi: {str(e)}\n\n💡 Vui lòng thử lại hoặc đặt câu hỏi khác."
 
-# Tạo giao diện Gradio TRƯỚC KHI khởi tạo system
+# Tạo giao diện Gradio
 print("🎨 Tạo giao diện Gradio...")
 interface = gr.Interface(
     fn=ask_question,
@@ -234,31 +260,20 @@ interface = gr.Interface(
     allow_flagging="never"
 )
 
-# Launch ứng dụng NGAY để Render detect port
 if __name__ == "__main__":
     print(f"🚀 Launching Gradio on port {port}")
     print(f"📡 Server binding: 0.0.0.0:{port}")
-    sys.stdout.flush()
     
-    # Launch trước, khởi tạo system sau
-    import threading
-    
-    def init_background():
-        """Khởi tạo system trong background"""
-        print("⚙️ Đang khởi tạo hệ thống trong background...")
-        system_ready = initialize_system()
-        if system_ready:
-            print("✅ Hệ thống sẵn sàng!")
-        else:
-            print("⚠️ Chạy ở chế độ demo")
-    
-    # Start background initialization
-    init_thread = threading.Thread(target=init_background)
+    # FORCE start initialization BEFORE launch
+    print("🔥 STARTING FORCED INITIALIZATION...")
+    init_thread = threading.Thread(target=initialize_system)
     init_thread.daemon = True
     init_thread.start()
     
+    # Small delay để thread bắt đầu
+    time.sleep(0.5)
+    
     try:
-        # Launch với parameters tối giản
         interface.launch(
             server_name="0.0.0.0",
             server_port=port,
@@ -267,12 +282,11 @@ if __name__ == "__main__":
         )
     except Exception as e:
         print(f"❌ Launch failed: {e}")
-        # Try with basic settings
         try:
             interface.launch(
                 server_name="0.0.0.0",
                 server_port=port
             )
         except Exception as e2:
-            print(f"❌ Second launch attempt failed: {e2}")
+            print(f"❌ Second launch failed: {e2}")
             sys.exit(1)
