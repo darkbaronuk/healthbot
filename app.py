@@ -8,8 +8,9 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+import shutil  # For cleaning ChromaDB
 
 # Debug và setup port cho Render
 port = int(os.environ.get("PORT", 7860))
@@ -48,6 +49,13 @@ def initialize_system():
     global qa_chain, vector_db
     
     try:
+        # Clean old ChromaDB if exists (fix column error)
+        chroma_path = "chroma_db"
+        if os.path.exists(chroma_path):
+            print("🧹 Cleaning old ChromaDB...")
+            shutil.rmtree(chroma_path)
+            print("✅ Old database cleaned")
+        
         # Load documents
         docs = []
         data_folder = "data"
@@ -92,11 +100,24 @@ def initialize_system():
             )
             
             print("💾 Tạo vector database...")
-            vector_db = Chroma.from_documents(
-                chunks, 
-                embedding, 
-                persist_directory="chroma_db"
-            )
+            try:
+                vector_db = Chroma.from_documents(
+                    chunks, 
+                    embedding, 
+                    persist_directory=chroma_path
+                )
+                print("✅ Vector database created successfully")
+            except Exception as e:
+                print(f"❌ ChromaDB error: {e}")
+                # Try alternative approach
+                print("🔄 Trying alternative ChromaDB setup...")
+                vector_db = Chroma.from_documents(
+                    documents=chunks,
+                    embedding=embedding,
+                    collection_name="medical_docs",
+                    persist_directory=None  # Use in-memory
+                )
+                print("✅ In-memory vector database created")
             
             prompt = PromptTemplate(
                 template="""
@@ -143,6 +164,8 @@ TRẢ LỜI:""",
             
     except Exception as e:
         print(f"❌ Lỗi khởi tạo hệ thống: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def ask_question(query):
@@ -242,15 +265,16 @@ if __name__ == "__main__":
     sys.stdout.flush()
     
     try:
+        # Fixed launch parameters for new Gradio version
         interface.launch(
             server_name="0.0.0.0",
             server_port=port,
             share=False,
             show_error=True,
-            enable_queue=True,
             show_api=False,
-            quiet=False,
-            debug=False
+            quiet=False
+            # Removed: enable_queue (deprecated)
+            # Removed: debug (deprecated)
         )
     except Exception as e:
         print(f"❌ Launch failed: {e}")
