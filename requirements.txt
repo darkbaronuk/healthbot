@@ -10,3 +10,4 @@ chromadb==0.4.24
 pydantic==2.8.2
 pydantic-core==2.20.1
 numpy==1.26.4
+pyaudioop==0.2.4
