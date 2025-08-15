@@ -1,6 +1,5 @@
 import os
 import sys
-import socket
 import gradio as gr
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -12,21 +11,13 @@ from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import shutil  # For cleaning ChromaDB
 
-# Debug và setup port cho Render
+# Setup port cho Render - ĐỪNG TEST PORT BINDING
 port = int(os.environ.get("PORT", 7860))
 print(f"🔍 ENV PORT: {os.environ.get('PORT', 'Not set')}")
 print(f"🔍 Using port: {port}")
 print(f"🔍 Python version: {sys.version}")
 
-# Test port binding
-try:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(('0.0.0.0', port))
-    sock.close()
-    print(f"✅ Port {port} is available for binding")
-except Exception as e:
-    print(f"❌ Port {port} binding test failed: {e}")
-
+# Bỏ port binding test - có thể gây conflict
 sys.stdout.flush()
 
 # Load biến môi trường
@@ -35,7 +26,6 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     print("❌ GOOGLE_API_KEY chưa được thiết lập!")
     print("🔑 Vui lòng thêm GOOGLE_API_KEY vào Environment Variables")
-    # Không exit để tránh crash trên Render
     GOOGLE_API_KEY = "dummy"  # Placeholder
 
 print("🚀 Khởi động Medical Chatbot với Google Gemini...")
@@ -104,20 +94,14 @@ def initialize_system():
                 vector_db = Chroma.from_documents(
                     chunks, 
                     embedding, 
-                    persist_directory=chroma_path
+                    persist_directory=None  # Use in-memory để tránh lỗi
                 )
                 print("✅ Vector database created successfully")
             except Exception as e:
                 print(f"❌ ChromaDB error: {e}")
-                # Try alternative approach
-                print("🔄 Trying alternative ChromaDB setup...")
-                vector_db = Chroma.from_documents(
-                    documents=chunks,
-                    embedding=embedding,
-                    collection_name="medical_docs",
-                    persist_directory=None  # Use in-memory
-                )
-                print("✅ In-memory vector database created")
+                # Fallback to simple setup
+                vector_db = None
+                return False
             
             prompt = PromptTemplate(
                 template="""
@@ -212,11 +196,7 @@ def ask_question(query):
         else:
             return f"❌ Lỗi: {str(e)}\n\n💡 Vui lòng thử lại hoặc đặt câu hỏi khác."
 
-# Khởi tạo hệ thống
-print("⚙️ Đang khởi tạo hệ thống...")
-system_ready = initialize_system()
-
-# Tạo giao diện Gradio
+# Tạo giao diện Gradio TRƯỚC KHI khởi tạo system
 print("🎨 Tạo giao diện Gradio...")
 interface = gr.Interface(
     fn=ask_question,
@@ -232,10 +212,10 @@ interface = gr.Interface(
         show_copy_button=True
     ),
     title="🏥 Trợ lý Y tế AI - Powered by Google Gemini",
-    description=f"""
+    description="""
     🤖 **Chatbot y tế thông minh** dựa trên tài liệu chính thức của Bộ Y tế Việt Nam
     
-    📊 **Trạng thái hệ thống:** {"✅ Sẵn sàng" if system_ready else "⚠️ Chế độ demo"}
+    📊 **Trạng thái hệ thống:** ⚙️ Đang khởi tạo...
     
     ⚠️ **Lưu ý quan trọng:** 
     - Thông tin chỉ mang tính tham khảo
@@ -249,33 +229,50 @@ interface = gr.Interface(
         "Thuốc nào điều trị viêm họng?",
         "Chế độ ăn cho người bệnh tim mạch?",
         "Cách sơ cứu khi bị đột quỵ?"
-    ] if system_ready else [
-        "Hệ thống đang trong chế độ demo",
-        "Vui lòng kiểm tra cấu hình API key"
     ],
     theme=gr.themes.Soft(),
-    allow_flagging="never",
-    analytics_enabled=False
+    allow_flagging="never"
 )
 
-# Launch ứng dụng với cấu hình cho Render
+# Launch ứng dụng NGAY để Render detect port
 if __name__ == "__main__":
     print(f"🚀 Launching Gradio on port {port}")
     print(f"📡 Server binding: 0.0.0.0:{port}")
     sys.stdout.flush()
     
+    # Launch trước, khởi tạo system sau
+    import threading
+    
+    def init_background():
+        """Khởi tạo system trong background"""
+        print("⚙️ Đang khởi tạo hệ thống trong background...")
+        system_ready = initialize_system()
+        if system_ready:
+            print("✅ Hệ thống sẵn sàng!")
+        else:
+            print("⚠️ Chạy ở chế độ demo")
+    
+    # Start background initialization
+    init_thread = threading.Thread(target=init_background)
+    init_thread.daemon = True
+    init_thread.start()
+    
     try:
-        # Fixed launch parameters for new Gradio version
+        # Launch với parameters tối giản
         interface.launch(
             server_name="0.0.0.0",
             server_port=port,
             share=False,
-            show_error=True,
-            show_api=False,
-            quiet=False
-            # Removed: enable_queue (deprecated)
-            # Removed: debug (deprecated)
+            show_error=True
         )
     except Exception as e:
         print(f"❌ Launch failed: {e}")
-        sys.exit(1)
+        # Try with basic settings
+        try:
+            interface.launch(
+                server_name="0.0.0.0",
+                server_port=port
+            )
+        except Exception as e2:
+            print(f"❌ Second launch attempt failed: {e2}")
+            sys.exit(1)
