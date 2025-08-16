@@ -267,7 +267,6 @@ TRẢ LỜI:""",
                     search_type="similarity",
                     search_kwargs={
                         "k": 5,         # Return top 5 relevant chunks
-                        "fetch_k": 20   # Search in top 20 candidates
                     }
                 ),
                 chain_type_kwargs={"prompt": prompt},
