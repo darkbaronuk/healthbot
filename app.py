@@ -12,7 +12,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import shutil
 import threading
 import time
-import signal
+from queue import Queue
 
 # Setup port cho Render
 port = int(os.environ.get("PORT", 7860))
@@ -42,12 +42,49 @@ vector_db = None
 initialization_status = "⚙️ Đang khởi tạo hệ thống..."
 system_ready = False
 
-def timeout_handler(signum, frame):
-    """Handler cho timeout"""
-    raise TimeoutError("Process timeout")
+def create_vector_db_with_timeout(chunks, embedding, timeout_seconds=120):
+    """Tạo vector database với timeout protection sử dụng threading"""
+    
+    def worker(result_queue):
+        try:
+            start_time = time.time()
+            print(f"💾 Creating vector database with {len(chunks)} chunks...")
+            
+            vector_db = Chroma.from_documents(
+                documents=chunks,
+                embedding=embedding,
+                persist_directory=None
+            )
+            
+            elapsed = time.time() - start_time
+            result_queue.put(('success', vector_db, elapsed))
+            
+        except Exception as e:
+            result_queue.put(('error', str(e), 0))
+    
+    result_queue = Queue()
+    worker_thread = threading.Thread(target=worker, args=(result_queue,), daemon=True)
+    
+    worker_thread.start()
+    worker_thread.join(timeout=timeout_seconds)
+    
+    if worker_thread.is_alive():
+        print("⚠️ Vector database creation timeout - trying emergency mode")
+        return None, "timeout"
+    
+    try:
+        result_type, result_data, elapsed = result_queue.get_nowait()
+        if result_type == 'success':
+            print(f"✅ Vector database created in {elapsed:.1f}s")
+            return result_data, 'success'
+        else:
+            print(f"❌ Vector database creation failed: {result_data}")
+            return None, result_data
+    except:
+        return None, "queue_error"
 
 def initialize_system():
-    """Khởi tạo hệ thống với optimizations cho speed"""
+    """Khởi tạo hệ thống tối ưu cho speed và stability"""
     global qa_chain, vector_db, initialization_status, system_ready
     
     print("\n⚡ STARTING OPTIMIZED INITIALIZATION")
@@ -61,8 +98,8 @@ def initialize_system():
             shutil.rmtree(chroma_path)
             print("✅ Old database cleaned")
         
-        # Step 2: Load documents with limits
-        initialization_status = "📂 Quick document scan..."
+        # Step 2: Load documents với smart limiting
+        initialization_status = "📂 Smart document loading..."
         docs = []
         data_folder = "data"
         
@@ -77,10 +114,10 @@ def initialize_system():
             initialization_status = "❌ No PDF files found"
             return False
         
-        # OPTIMIZATION: Limit files for faster startup
-        max_files = 2
+        # Smart limiting: Chỉ load số lượng cần thiết
+        max_files = 3  # Tăng lên 3 files
         limited_files = pdf_files[:max_files]
-        print(f"📚 Processing {len(limited_files)} files (limited for speed)")
+        print(f"📚 Processing {len(limited_files)} files for optimal performance")
         
         initialization_status = f"📄 Loading {len(limited_files)} PDF files..."
         
@@ -90,16 +127,17 @@ def initialize_system():
                 loader = PyPDFLoader(os.path.join(data_folder, file))
                 file_docs = loader.load()
                 
-                # OPTIMIZATION: Limit pages per file
-                max_pages = 15
+                # Smart page limiting
+                max_pages = 20  # Tăng lên 20 pages per file
                 if len(file_docs) > max_pages:
                     file_docs = file_docs[:max_pages]
-                    print(f"   ⚡ Limited to {len(file_docs)} pages for speed")
+                    print(f"   ⚡ Using first {len(file_docs)} pages for speed")
                 
                 for doc in file_docs:
                     doc.metadata.update({
                         "source_file": file,
-                        "page_count": len(file_docs)
+                        "page_count": len(file_docs),
+                        "file_index": i
                     })
                 
                 docs.extend(file_docs)
@@ -114,94 +152,87 @@ def initialize_system():
             initialization_status = "❌ Failed to load documents"
             return False
         
-        print(f"✅ Total loaded: {len(docs)} pages")
+        print(f"✅ Total loaded: {len(docs)} pages from {len(limited_files)} files")
         
-        # Step 3: Text splitting with optimization
-        initialization_status = "✂️ Optimized text splitting..."
+        # Step 3: Optimized text splitting
+        initialization_status = "✂️ Smart text chunking..."
         print("✂️ Creating optimized chunks...")
         
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1200,        # Balanced size
-            chunk_overlap=150,      # Reasonable overlap
+            chunk_size=1000,        # Balanced for quality vs speed
+            chunk_overlap=200,      # Good overlap for context
             length_function=len,
             separators=["\n\n", "\n", ". ", "! ", "? ", " "]
         )
         
         chunks = splitter.split_documents(docs)
         
-        # CRITICAL OPTIMIZATION: Hard limit chunks for vector DB speed
-        max_chunks = 80
-        if len(chunks) > max_chunks:
-            chunks = chunks[:max_chunks]
-            print(f"⚡ LIMITED to {max_chunks} chunks for optimal performance")
+        # Progressive limiting based on chunk count
+        if len(chunks) > 150:
+            chunks = chunks[:150]
+            print(f"⚡ Limited to 150 chunks for optimal performance")
+        elif len(chunks) > 100:
+            chunks = chunks[:100]
+            print(f"⚡ Limited to 100 chunks for good performance")
         
-        print(f"✅ Using {len(chunks)} chunks")
+        print(f"✅ Using {len(chunks)} optimized chunks")
         
         # Step 4: Fast embedding model
-        initialization_status = "🔧 Loading fast embedding model..."
-        print("🔧 Loading optimized embedding model...")
-        
-        embedding = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",  # Fastest model
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-        print("✅ Fast embedding model loaded")
-        
-        # Step 5: Vector database with timeout protection
-        initialization_status = "💾 Creating vector database with timeout..."
-        print(f"💾 Creating vector database ({len(chunks)} chunks)...")
-        
-        # Set timeout protection
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(90)  # 90 seconds max
+        initialization_status = "🔧 Loading embedding model..."
+        print("🔧 Loading fast embedding model...")
         
         try:
-            start_time = time.time()
-            
-            vector_db = Chroma.from_documents(
-                documents=chunks,
-                embedding=embedding,
-                persist_directory=None  # In-memory for speed
+            embedding = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",  # Fastest model
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
             )
-            
-            elapsed = time.time() - start_time
-            signal.alarm(0)  # Cancel timeout
-            print(f"✅ Vector database created in {elapsed:.1f}s")
-            
-        except TimeoutError:
-            signal.alarm(0)
-            print("❌ Vector database creation timeout")
-            
-            # Emergency fallback: Use even fewer chunks
-            emergency_chunks = chunks[:40]
-            print(f"🚨 Emergency mode: Using only {len(emergency_chunks)} chunks")
-            
-            vector_db = Chroma.from_documents(
-                documents=emergency_chunks,
-                embedding=embedding,
-                persist_directory=None
-            )
-            print("✅ Emergency vector database created")
-            
+            print("✅ Fast embedding model loaded")
         except Exception as e:
-            signal.alarm(0)
-            print(f"❌ Vector database creation failed: {e}")
-            initialization_status = f"❌ Vector DB error: {str(e)[:50]}..."
+            print(f"❌ Embedding model loading failed: {e}")
+            initialization_status = f"❌ Embedding model error: {str(e)[:50]}..."
             return False
         
-        # Step 6: Setup QA chain
-        initialization_status = "🤖 Setting up AI system..."
-        print("🤖 Setting up Gemini AI...")
+        # Step 5: Vector database với timeout protection
+        initialization_status = "💾 Building vector database..."
+        print(f"💾 Building vector database ({len(chunks)} chunks)...")
         
-        # Verify API key
+        vector_db, status = create_vector_db_with_timeout(chunks, embedding, timeout_seconds=120)
+        
+        if status == 'timeout':
+            # Emergency mode: Use fewer chunks
+            emergency_chunks = chunks[:50]
+            print(f"🚨 Emergency mode: Using only {len(emergency_chunks)} chunks")
+            
+            try:
+                vector_db = Chroma.from_documents(
+                    documents=emergency_chunks,
+                    embedding=embedding,
+                    persist_directory=None
+                )
+                print("✅ Emergency vector database created")
+            except Exception as e:
+                print(f"❌ Emergency vector DB also failed: {e}")
+                initialization_status = f"❌ Vector DB failed: {str(e)[:50]}..."
+                return False
+                
+        elif status != 'success':
+            print(f"❌ Vector database creation failed: {status}")
+            initialization_status = f"❌ Vector DB error: {status[:50]}..."
+            return False
+        
+        # Step 6: API Key validation
         if GOOGLE_API_KEY == "dummy":
             print("❌ API Key not configured")
             initialization_status = "❌ API Key not configured"
             return False
         
+        # Step 7: Setup AI system
+        initialization_status = "🤖 Setting up AI system..."
+        print("🤖 Setting up Gemini AI...")
+        
         try:
-            # Optimized prompt
+            # Create optimized prompt
             prompt = PromptTemplate(
                 template="""Bạn là trợ lý y tế AI của Hội Thầy thuốc trẻ Việt Nam.
 
@@ -210,12 +241,12 @@ TÀI LIỆU THAM KHẢO:
 
 CÂU HỎI: {question}
 
-HƯỚNG DẪN:
+HƯỚNG DẪN TRẢ LỜI:
 - Trả lời bằng tiếng Việt chính xác, chuyên nghiệp
-- Dựa vào thông tin từ tài liệu được cung cấp
+- Dựa chủ yếu vào thông tin từ tài liệu được cung cấp
 - Nếu không có thông tin trong tài liệu, nói rõ "Thông tin này chưa có trong tài liệu tham khảo"
-- Đưa ra lời khuyên y tế cẩn trọng
-- Luôn khuyến khích tham khảo Thầy thuốc chuyên khoa
+- Đưa ra lời khuyên y tế cẩn trọng và khuyến khích tham khảo Thầy thuốc chuyên khoa
+- Luôn nhắc nhở tầm quan trọng của việc khám bệnh trực tiếp
 
 TRẢ LỜI:""",
                 input_variables=["context", "question"]
@@ -229,16 +260,16 @@ TRẢ LỜI:""",
                 max_output_tokens=6144
             )
             
-            # Test LLM connection
+            # Quick API test
             print("   Testing API connection...")
-            test_response = llm.invoke("Test")
+            test_response = llm.invoke("Test connection")
             print(f"   ✅ API test successful: {test_response.content[:30]}...")
             
             # Create QA chain
             qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 retriever=vector_db.as_retriever(
-                    search_kwargs={"k": 4}  # Optimized retrieval
+                    search_kwargs={"k": 5}  # Return top 5 relevant chunks
                 ),
                 chain_type_kwargs={"prompt": prompt},
                 return_source_documents=True
@@ -254,6 +285,8 @@ TRẢ LỜI:""",
                 initialization_status = "❌ API Key authentication failed"
             elif "quota" in error_msg or "limit" in error_msg:
                 initialization_status = "❌ API quota exceeded"
+            elif "permission" in error_msg:
+                initialization_status = "❌ API Key insufficient permissions"
             else:
                 initialization_status = f"❌ LLM error: {str(llm_error)[:100]}..."
             
@@ -261,9 +294,12 @@ TRẢ LỜI:""",
         
         # Success!
         print("\n" + "=" * 50)
-        print("✅ SYSTEM READY!")
-        print(f"📊 Stats: {len(docs)} pages → {len(chunks)} chunks")
-        print(f"🚀 Initialization completed successfully")
+        print("✅ SYSTEM INITIALIZATION COMPLETED!")
+        print(f"📊 Final stats:")
+        print(f"   • Documents: {len(docs)} pages")
+        print(f"   • Chunks: {len(chunks) if 'chunks' in locals() else 'N/A'}")
+        print(f"   • Vector DB: {'✅ Ready' if vector_db else '❌ Failed'}")
+        print(f"   • AI Model: ✅ Gemini 1.5 Pro")
         print("=" * 50)
         
         initialization_status = "✅ Sẵn sàng tư vấn y tế!"
@@ -278,49 +314,58 @@ TRẢ LỜI:""",
         return False
 
 def ask_question(query):
-    """Xử lý câu hỏi từ người dùng"""
+    """Xử lý câu hỏi từ người dùng với comprehensive error handling"""
     global initialization_status, system_ready
     
-    # Basic validation
+    # Input validation
     if not query or not query.strip():
-        return f"❓ Vui lòng nhập câu hỏi.\n\n📊 Trạng thái: {initialization_status}"
+        return f"❓ Vui lòng nhập câu hỏi.\n\n📊 Trạng thái hệ thống: {initialization_status}"
     
     query = query.strip()
     
     if len(query) > 1000:
-        return "📝 Câu hỏi quá dài. Vui lòng rút ngắn dưới 1000 ký tự."
+        return "📝 Câu hỏi quá dài. Vui lòng rút ngắn dưới 1000 ký tự để đảm bảo chất lượng trả lời tốt nhất."
     
-    # Check API Key
+    # System readiness check
     if GOOGLE_API_KEY == "dummy":
         return """🔑 Lỗi API Key - Hệ thống chưa được cấu hình.
 
-📝 Hướng dẫn:
-1. Vào Render Dashboard
-2. Settings → Environment
-3. Thêm GOOGLE_API_KEY với giá trị từ Google AI Studio
-4. Redeploy service
+📝 Hướng dẫn khắc phục:
+1. Truy cập Render Dashboard
+2. Vào Settings → Environment
+3. Thêm biến GOOGLE_API_KEY với giá trị từ Google AI Studio
+4. Redeploy service sau khi cập nhật
 
-💡 API Key phải bắt đầu bằng 'AIza...'"""
+💡 Lưu ý: API Key phải bắt đầu bằng 'AIza...'"""
     
-    # Check system readiness
     if not system_ready or not qa_chain:
         return f"""🔧 Hệ thống AI chưa sẵn sàng.
 
-📊 Trạng thái: {initialization_status}
+📊 Trạng thái hiện tại: {initialization_status}
 
-💡 Thời gian ước tính: 1-2 phút
-🔄 Vui lòng chờ và thử lại..."""
+💡 Thông tin:
+• Thời gian ước tính: 1-3 phút tùy dung lượng dữ liệu
+• Hệ thống đang load và xử lý tài liệu y tế
+• Vui lòng chờ và thử lại sau
+
+🔄 Refresh trang và thử lại sau ít phút..."""
     
     # Process question
     try:
-        print(f"🔍 Processing: {query[:50]}...")
+        print(f"🔍 Processing question: {query[:50]}{'...' if len(query) > 50 else ''}")
         
+        # Validate qa_chain exists and is callable
+        if not hasattr(qa_chain, 'invoke'):
+            return "❌ Hệ thống AI chưa được khởi tạo đúng cách. Vui lòng refresh trang và thử lại."
+        
+        # Execute query
         start_time = time.time()
         result = qa_chain.invoke({"query": query})
         processing_time = time.time() - start_time
         
-        print(f"✅ Processed in {processing_time:.2f}s")
+        print(f"✅ Question processed in {processing_time:.2f}s")
         
+        # Extract and format answer
         answer = result.get("result", "Không thể tạo câu trả lời.")
         
         # Add source information
@@ -332,35 +377,68 @@ def ask_question(query):
                     source_files.add(doc.metadata["source_file"])
             
             if source_files:
-                answer += f"\n\n📚 **Nguồn tài liệu:** {', '.join(sorted(source_files))}"
+                answer += f"\n\n📚 **Nguồn tài liệu tham khảo:** {', '.join(sorted(source_files))}"
         
-        # Add disclaimer
-        answer += f"\n\n---\n⚠️ **Lưu ý:** Thông tin chỉ mang tính tham khảo. Hãy tham khảo Thầy thuốc chuyên khoa để được chẩn đoán và điều trị chính xác."
+        # Add medical disclaimer
+        answer += f"\n\n---\n⚠️ **Lưu ý quan trọng:** Thông tin trên chỉ mang tính chất tham khảo. Hãy tham khảo Thầy thuốc chuyên khoa để được chẩn đoán và điều trị chính xác. Trong trường hợp cấp cứu, hãy gọi 115."
         
         return answer
         
     except Exception as e:
-        print(f"❌ Query error: {e}")
+        print(f"❌ Query processing error: {e}")
         error_msg = str(e).lower()
         
+        # Specific error handling
         if "quota" in error_msg or "limit" in error_msg:
-            return "⚠️ Vượt quá giới hạn API (15 requests/phút). Vui lòng chờ 1-2 phút và thử lại."
+            return """⚠️ Vượt quá giới hạn API.
+
+📊 Chi tiết:
+• Google AI Studio có giới hạn 15 requests/phút cho free tier
+• Vui lòng chờ 1-2 phút và thử lại
+• Hoặc nâng cấp lên paid plan để có quota cao hơn
+
+⏰ Thử lại sau: 2-3 phút"""
+            
         elif "safety" in error_msg:
-            return "⚠️ Câu hỏi chứa nội dung nhạy cảm. Vui lòng diễn đạt lại."
+            return """⚠️ Câu hỏi chứa nội dung được đánh giá là nhạy cảm.
+
+💡 Khuyến nghị:
+• Diễn đạt lại câu hỏi một cách rõ ràng và trực tiếp hơn
+• Tập trung vào khía cạnh y tế/sức khỏe cụ thể
+• Tránh các từ ngữ có thể gây hiểu lầm
+
+🔄 Vui lòng thử đặt câu hỏi khác."""
+            
         elif "api" in error_msg or "authentication" in error_msg:
-            return "🔑 Lỗi API Key. Vui lòng kiểm tra cấu hình GOOGLE_API_KEY."
+            return """🔑 Lỗi xác thực API Key.
+
+❌ Nguyên nhân có thể:
+• API Key không đúng định dạng hoặc đã hết hạn
+• Billing account chưa được kích hoạt trong Google Cloud
+• Service bị vô hiệu hóa
+
+🔗 Kiểm tra tại: https://console.cloud.google.com/apis/credentials"""
+            
         else:
-            return f"❌ Lỗi: {str(e)[:200]}...\n\n💡 Vui lòng thử lại."
+            return f"""❌ Có lỗi xảy ra khi xử lý câu hỏi.
+
+🔍 Chi tiết lỗi: {str(e)[:200]}{'...' if len(str(e)) > 200 else ''}
+
+💡 Các bước khắc phục:
+• Thử lại sau vài phút
+• Đặt câu hỏi khác hoặc diễn đạt lại
+• Kiểm tra kết nối internet
+• Liên hệ hỗ trợ nếu lỗi tiếp tục"""
 
 def create_professional_interface():
-    """Tạo giao diện chuyên nghiệp cho Hội Thầy thuốc trẻ VN"""
+    """Tạo giao diện chuyên nghiệp cho Hội Thầy thuốc trẻ Việt Nam"""
     
     with gr.Blocks(
         theme=gr.themes.Soft(),
         css="""
         .gradio-container { 
             background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); 
-            font-family: 'Inter', 'Segoe UI', sans-serif;
+            font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
         }
         .custom-header {
             background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%);
@@ -434,7 +512,7 @@ def create_professional_interface():
         title="🏥 Hội Thầy thuốc trẻ Việt Nam - AI Medical Assistant"
     ) as interface:
         
-        # HEADER với logo và branding
+        # PROFESSIONAL HEADER với logo và branding
         gr.HTML("""
         <div class="custom-header">
             <div class="logo-section">
@@ -485,11 +563,11 @@ def create_professional_interface():
             with gr.Column(scale=2):
                 question_input = gr.Textbox(
                     lines=4,
-                    placeholder="💬 Đặt câu hỏi về: triệu chứng bệnh, thuốc men, chế độ dinh dưỡng, sơ cứu, phòng bệnh...",
+                    placeholder="💬 Đặt câu hỏi về: triệu chứng bệnh, thuốc men, chế độ dinh dưỡng, sơ cứu, phòng bệnh, xét nghiệm...",
                     label="🩺 Câu hỏi y tế của bạn",
                     max_lines=6,
                     show_label=True,
-                    info="Hãy mô tả chi tiết để nhận được tư vấn chính xác nhất."
+                    info="Hãy mô tả chi tiết triệu chứng hoặc vấn đề sức khỏe để nhận được tư vấn chính xác nhất."
                 )
                 
                 with gr.Row():
@@ -529,6 +607,14 @@ def create_professional_interface():
                             <span style="color: #64748b;">info@thaythuoctre.vn</span>
                         </div>
                         
+                        <div style="margin-bottom: 15px;">
+                            <strong style="color: #1e40af;">🎯 Sứ mệnh:</strong><br>
+                            <span style="color: #64748b; font-size: 14px;">
+                                Nâng cao chất lượng chăm sóc sức khỏe<br>
+                                và ứng dụng công nghệ trong y tế
+                            </span>
+                        </div>
+                        
                         <div style="background: #f1f5f9; padding: 15px; border-radius: 10px; border-left: 4px solid #1d4ed8; margin-bottom: 15px;">
                             <strong style="color: #1e40af;">📊 Trạng thái AI:</strong><br>
                             <span style="color: #059669; font-weight: 600;">
@@ -561,35 +647,38 @@ def create_professional_interface():
                 </div>
                 """)
         
-        # OUTPUT
+        # OUTPUT SECTION
         answer_output = gr.Textbox(
             lines=12,
             label="🩺 Tư vấn từ Thầy thuốc AI",
             show_copy_button=True,
             interactive=False,
-            placeholder="Câu trả lời chi tiết từ AI sẽ hiển thị ở đây..."
+            placeholder="Câu trả lời chi tiết từ AI sẽ hiển thị ở đây...",
+            info="Bạn có thể copy câu trả lời để lưu lại hoặc chia sẻ với Thầy thuốc."
         )
         
-        # EXAMPLES
+        # EXAMPLES SECTION
         gr.Examples(
             examples=[
                 "Triệu chứng của bệnh tiểu đường type 2 là gì?",
                 "Cách phòng ngừa bệnh cao huyết áp ở người trẻ?",
-                "Thuốc paracetamol có tác dụng phụ gì?",
-                "Chế độ ăn uống cho người bệnh tim mạch?",
+                "Thuốc paracetamol có tác dụng phụ gì? Liều dùng như thế nào?",
+                "Chế độ ăn uống cho người bệnh tim mạch cần lưu ý gì?",
                 "Cách sơ cứu ban đầu khi bị đột quỵ?",
-                "Vaccine COVID-19 có an toàn không?",
-                "Triệu chứng viêm gan B như thế nào?",
-                "Cách chăm sóc trẻ em bị sốt cao?",
-                "Dấu hiệu nhận biết bệnh trầm cảm?",
-                "Thuốc kháng sinh nên dùng như thế nào?"
+                "Vaccine COVID-19 có an toàn không? Ai nên tiêm?",
+                "Triệu chứng viêm gan B như thế nào? Cách phòng ngừa?",
+                "Cách chăm sóc trẻ em bị sốt cao tại nhà?",
+                "Dấu hiệu nhận biết bệnh trầm cảm ở người trẻ?",
+                "Thuốc kháng sinh nên dùng như thế nào cho đúng?",
+                "Triệu chứng và cách xử lý khi bị ngộ độc thực phẩm?",
+                "Cách chăm sóc da mặt cho người bị mụn trứng cá?"
             ],
             inputs=question_input,
             label="💡 Câu hỏi mẫu - Click để thử ngay",
-            examples_per_page=5
+            examples_per_page=6
         )
         
-        # FOOTER
+        # PROFESSIONAL FOOTER
         gr.HTML("""
         <div style="background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); padding: 30px; border-radius: 20px; margin-top: 30px; border-top: 4px solid #1d4ed8; text-align: center;">
             <div style="display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 20px; flex-wrap: wrap;">
@@ -631,6 +720,9 @@ def create_professional_interface():
                 <p style="margin: 10px 0 0 0;">
                     <a href="https://thaythuoctre.vn" target="_blank" style="color: #1d4ed8; text-decoration: none;">
                         🌐 Truy cập website chính thức
+                    </a> | 
+                    <a href="mailto:info@thaythuoctre.vn" style="color: #1d4ed8; text-decoration: none;">
+                        📧 Liên hệ hỗ trợ
                     </a>
                 </p>
             </div>
@@ -644,7 +736,7 @@ def create_professional_interface():
     
     return interface
 
-# Tạo interface
+# Tạo professional interface
 print("🎨 Creating professional interface...")
 interface = create_professional_interface()
 
@@ -656,7 +748,7 @@ if __name__ == "__main__":
     print(f"📡 Server: 0.0.0.0:{port}")
     print(f"🔑 API Key: {'✅ Configured' if GOOGLE_API_KEY != 'dummy' else '❌ Missing'}")
     print(f"🤖 AI Model: Google Gemini 1.5 Pro")
-    print(f"⚡ Optimizations: Fast embedding + Limited chunks")
+    print(f"⚡ Optimizations: Threading timeout + Smart limiting")
     print("=" * 60)
     
     # Start optimized background initialization
@@ -669,16 +761,20 @@ if __name__ == "__main__":
     
     # Launch interface
     try:
-        print("🌟 Launching interface...")
+        print("🌟 Launching professional interface...")
         interface.launch(
             server_name="0.0.0.0",
             server_port=port,
             share=False,
-            show_error=True
+            show_error=True,
+            show_api=False,
+            quiet=False
         )
         
     except Exception as e:
-        print(f"❌ Launch failed: {e}")
+        print(f"❌ Primary launch failed: {e}")
+        print("🔄 Attempting fallback launch...")
+        
         try:
             interface.launch(
                 server_name="0.0.0.0",
@@ -686,4 +782,5 @@ if __name__ == "__main__":
             )
         except Exception as e2:
             print(f"❌ Fallback launch failed: {e2}")
+            print("💔 Unable to start server. Check configuration and try again.")
             sys.exit(1)
