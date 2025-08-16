@@ -288,46 +288,50 @@ def create_thaythuoctre_interface():
     ) as interface:
         
         # CUSTOM HEADER
-        gr.HTML("""
-        <div class="custom-header">
-            <div class="logo-section">
-                <div class="logo-circle">👨‍⚕️</div>
-                <div style="text-align: center;">
-                    <h1 style="margin: 0; font-size: 32px; font-weight: 800; text-shadow: 2px 2px 6px rgba(0,0,0,0.2); letter-spacing: -0.5px;">
-                        HỘI THẦY THUỐC TRẺ VIỆT NAM
-                    </h1>
-                    <p style="margin: 10px 0 0 0; font-size: 18px; opacity: 0.95; font-weight: 400;">
-                        🤖 Trợ lý Y tế AI - Tư vấn sức khỏe thông minh 24/7
-                    </p>
-                    <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.8;">
-                        Được phát triển bởi các bác sĩ trẻ Việt Nam
-                    </p>
-                </div>
+gr.HTML("""
+<div class="custom-header">
+    <div class="logo-section">
+        <div style="width: 85px; height: 85px; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 25px rgba(0,0,0,0.15); border: 3px solid rgba(255,255,255,0.3); padding: 8px;">
+            <img src="http://thaythuoctre.vn/wp-content/uploads/2020/12/logo-ttt.png" 
+                 alt="Logo Hội Thầy thuốc trẻ VN" 
+                 style="width: 100%; height: 100%; object-fit: contain; border-radius: 50%;">
+        </div>
+        <div style="text-align: center;">
+            <h1 style="margin: 0; font-size: 32px; font-weight: 800; color: white; text-shadow: 2px 2px 6px rgba(0,0,0,0.3); letter-spacing: -0.5px;">
+                HỘI THẦY THUỐC TRẺ VIỆT NAM
+            </h1>
+            <p style="margin: 10px 0 0 0; font-size: 18px; color: white; opacity: 0.95; font-weight: 400;">
+                🤖 Trợ lý Y tế AI - Tư vấn sức khỏe thông minh 24/7
+            </p>
+            <p style="margin: 8px 0 0 0; font-size: 14px; color: white; opacity: 0.9;">
+                Được phát triển bởi các bác sĩ trẻ Việt Nam
+            </p>
+        </div>
+    </div>
+    
+    <div style="background: rgba(255,255,255,0.15); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px);">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; text-align: center;">
+            <div>
+                <div style="font-size: 24px; margin-bottom: 5px;">🌐</div>
+                <strong style="color: white;">Website chính thức</strong><br>
+                <a href="https://thaythuoctre.vn" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600;">
+                    thaythuoctre.vn
+                </a>
             </div>
-            
-            <div style="background: rgba(255,255,255,0.15); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px);">
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; text-align: center;">
-                    <div>
-                        <div style="font-size: 24px; margin-bottom: 5px;">🌐</div>
-                        <strong>Website chính thức</strong><br>
-                        <a href="https://thaythuoctre.vn" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600;">
-                            thaythuoctre.vn
-                        </a>
-                    </div>
-                    <div>
-                        <div style="font-size: 24px; margin-bottom: 5px;">🤖</div>
-                        <strong>AI Technology</strong><br>
-                        <span style="color: #34d399; font-weight: 600;">Google Gemini Pro</span>
-                    </div>
-                    <div>
-                        <div style="font-size: 24px; margin-bottom: 5px;">📚</div>
-                        <strong>Nguồn dữ liệu</strong><br>
-                        <span style="color: #f87171; font-weight: 600;">Bộ Y tế Việt Nam</span>
-                    </div>
-                </div>
+            <div>
+                <div style="font-size: 24px; margin-bottom: 5px;">🤖</div>
+                <strong style="color: white;">AI Technology</strong><br>
+                <span style="color: #34d399; font-weight: 600;">Google Gemini Pro</span>
+            </div>
+            <div>
+                <div style="font-size: 24px; margin-bottom: 5px;">📚</div>
+                <strong style="color: white;">Nguồn dữ liệu</strong><br>
+                <span style="color: #f87171; font-weight: 600;">Bộ Y tế Việt Nam</span>
             </div>
         </div>
-        """)
+    </div>
+</div>
+""")
         
         # MAIN INTERFACE
         with gr.Row():
