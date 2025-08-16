@@ -224,40 +224,277 @@ def ask_question(query):
 
 # Tạo giao diện Gradio
 print("🎨 Tạo giao diện Gradio...")
-interface = gr.Interface(
-    fn=ask_question,
-    inputs=gr.Textbox(
-        lines=3,
-        placeholder="Ví dụ: Triệu chứng của bệnh tiểu đường là gì?",
-        label="💬 Câu hỏi y tế của bạn",
-        max_lines=5
-    ),
-    outputs=gr.Textbox(
-        lines=10,
-        label="🩺 Trả lời từ trợ lý y tế",
-        show_copy_button=True
-    ),
-    title="🏥 Trợ lý Y tế AI - Powered by Google Gemini",
-    description="""
-    🤖 **Chatbot y tế thông minh** dựa trên tài liệu chính thức của Bộ Y tế Việt Nam
+interface = create_thaythuoctre_interface()
+def create_thaythuoctre_interface():
+    with gr.Blocks(
+        theme=gr.themes.Soft(), 
+        css="""
+        .gradio-container { 
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); 
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+        }
+        .custom-header {
+            background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%);
+            color: white;
+            padding: 35px;
+            border-radius: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 12px 40px rgba(29, 78, 216, 0.25);
+        }
+        .logo-section {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 25px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+        .logo-circle {
+            width: 85px;
+            height: 85px;
+            background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 45px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            border: 3px solid rgba(255,255,255,0.3);
+        }
+        .info-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+            border-left: 5px solid #1d4ed8;
+            margin-bottom: 20px;
+        }
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .stat-item {
+            background: #f8fafc;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid #e2e8f0;
+        }
+        .submit-btn {
+            background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%) !important;
+            border: none !important;
+            color: white !important;
+            font-weight: 600 !important;
+            padding: 12px 24px !important;
+            border-radius: 12px !important;
+            transition: all 0.3s ease !important;
+        }
+        .submit-btn:hover {
+            transform: translateY(-2px) !important;
+            box-shadow: 0 8px 25px rgba(29, 78, 216, 0.4) !important;
+        }
+        @media (max-width: 768px) {
+            .logo-section { flex-direction: column; gap: 15px; }
+            .custom-header { padding: 25px 20px; }
+        }
+        """,
+        title="🏥 Hội Thầy thuốc trẻ Việt Nam - AI Assistant"
+    ) as interface:
+        
+        # CUSTOM HEADER
+        gr.HTML("""
+        <div class="custom-header">
+            <div class="logo-section">
+                <div class="logo-circle">👨‍⚕️</div>
+                <div style="text-align: center;">
+                    <h1 style="margin: 0; font-size: 32px; font-weight: 800; text-shadow: 2px 2px 6px rgba(0,0,0,0.2); letter-spacing: -0.5px;">
+                        HỘI THẦY THUỐC TRẺ VIỆT NAM
+                    </h1>
+                    <p style="margin: 10px 0 0 0; font-size: 18px; opacity: 0.95; font-weight: 400;">
+                        🤖 Trợ lý Y tế AI - Tư vấn sức khỏe thông minh 24/7
+                    </p>
+                    <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.8;">
+                        Được phát triển bởi các bác sĩ trẻ Việt Nam
+                    </p>
+                </div>
+            </div>
+            
+            <div style="background: rgba(255,255,255,0.15); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px);">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; text-align: center;">
+                    <div>
+                        <div style="font-size: 24px; margin-bottom: 5px;">🌐</div>
+                        <strong>Website chính thức</strong><br>
+                        <a href="https://thaythuoctre.vn" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600;">
+                            thaythuoctre.vn
+                        </a>
+                    </div>
+                    <div>
+                        <div style="font-size: 24px; margin-bottom: 5px;">🤖</div>
+                        <strong>AI Technology</strong><br>
+                        <span style="color: #34d399; font-weight: 600;">Google Gemini Pro</span>
+                    </div>
+                    <div>
+                        <div style="font-size: 24px; margin-bottom: 5px;">📚</div>
+                        <strong>Nguồn dữ liệu</strong><br>
+                        <span style="color: #f87171; font-weight: 600;">Bộ Y tế Việt Nam</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """)
+        
+        # MAIN INTERFACE
+        with gr.Row():
+            with gr.Column(scale=2):
+                question_input = gr.Textbox(
+                    lines=4,
+                    placeholder="💬 Đặt câu hỏi về: triệu chứng bệnh, thuốc men, chế độ dinh dưỡng, sơ cứu, phòng bệnh...",
+                    label="🩺 Câu hỏi y tế của bạn",
+                    max_lines=6,
+                    show_label=True
+                )
+                
+                with gr.Row():
+                    submit_btn = gr.Button(
+                        "🔍 Tư vấn với AI Doctor", 
+                        variant="primary", 
+                        size="lg"
+                    )
+                    clear_btn = gr.Button("🗑️ Xóa", variant="secondary")
+            
+            with gr.Column(scale=1):
+                # THÔNG TIN HỘI
+                gr.HTML(f"""
+                <div class="info-card">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <div style="width: 50px; height: 50px; background: linear-gradient(135deg, #1e40af, #1d4ed8); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: white; font-size: 24px; margin-bottom: 10px;">👨‍⚕️</div>
+                        <h3 style="color: #1e40af; margin: 0; font-size: 18px; font-weight: 700;">
+                            Hội Thầy thuốc trẻ Việt Nam
+                        </h3>
+                    </div>
+                    
+                    <div style="space-y: 15px;">
+                        <div style="margin-bottom: 15px;">
+                            <strong style="color: #1e40af;">🌐 Website:</strong><br>
+                            <a href="https://thaythuoctre.vn" target="_blank" style="color: #1d4ed8; text-decoration: none;">
+                                thaythuoctre.vn
+                            </a>
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <strong style="color: #1e40af;">📧 Liên hệ:</strong><br>
+                            <span style="color: #64748b;">info@thaythuoctre.vn</span>
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <strong style="color: #1e40af;">🎯 Sứ mệnh:</strong><br>
+                            <span style="color: #64748b; font-size: 14px;">
+                                Nâng cao chất lượng chăm sóc sức khỏe<br>
+                                và ứng dụng công nghệ trong y tế
+                            </span>
+                        </div>
+                        
+                        <div style="background: #f1f5f9; padding: 15px; border-radius: 10px; border-left: 4px solid #1d4ed8;">
+                            <strong style="color: #1e40af;">📊 Trạng thái AI:</strong><br>
+                            <span id="ai-status" style="color: #059669; font-weight: 600;">
+                                {initialization_status}
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-grid">
+                        <div class="stat-item">
+                            <div style="font-size: 20px; color: #1d4ed8; font-weight: 700;">24/7</div>
+                            <div style="font-size: 12px; color: #64748b;">Hỗ trợ</div>
+                        </div>
+                        <div class="stat-item">
+                            <div style="font-size: 20px; color: #059669; font-weight: 700;">AI</div>
+                            <div style="font-size: 12px; color: #64748b;">Thông minh</div>
+                        </div>
+                        <div class="stat-item">
+                            <div style="font-size: 20px; color: #dc2626; font-weight: 700;">VN</div>
+                            <div style="font-size: 12px; color: #64748b;">Tiếng Việt</div>
+                        </div>
+                    </div>
+                </div>
+                """)
+        
+        # OUTPUT
+        answer_output = gr.Textbox(
+            lines=12,
+            label="🩺 Tư vấn từ AI Doctor",
+            show_copy_button=True,
+            interactive=False,
+            placeholder="Câu trả lời từ AI sẽ hiển thị ở đây..."
+        )
+        
+        # EXAMPLES
+        gr.Examples(
+            examples=[
+                "Triệu chứng của bệnh tiểu đường type 2 là gì?",
+                "Cách phòng ngừa bệnh cao huyết áp ở người trẻ?",
+                "Thuốc paracetamol có tác dụng phụ gì?",
+                "Chế độ ăn uống cho người bệnh tim mạch?",
+                "Cách sơ cứu ban đầu khi bị đột quỵ?",
+                "Vaccine COVID-19 có an toàn không?",
+                "Triệu chứng viêm gan B như thế nào?",
+                "Cách chăm sóc trẻ em bị sốt cao?",
+            ],
+            inputs=question_input,
+            label="💡 Câu hỏi mẫu - Click để thử ngay",
+            examples_per_page=4
+        )
+        
+        # FOOTER
+        gr.HTML("""
+        <div style="background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); padding: 30px; border-radius: 20px; margin-top: 30px; border-top: 4px solid #1d4ed8; text-align: center;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 20px; flex-wrap: wrap;">
+                <div style="width: 50px; height: 50px; background: linear-gradient(135deg, #1e40af, #1d4ed8); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 24px;">👨‍⚕️</div>
+                <div>
+                    <h4 style="margin: 0; color: #1e40af; font-size: 20px; font-weight: 700;">
+                        Hội Thầy thuốc trẻ Việt Nam
+                    </h4>
+                    <p style="margin: 5px 0 0 0; color: #64748b; font-size: 14px;">
+                        Young Vietnamese Doctors Association
+                    </p>
+                </div>
+            </div>
+            
+            <div style="background: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
+                <p style="color: #dc2626; margin: 0; font-weight: 600; font-size: 16px;">
+                    ⚠️ LưU Ý QUAN TRỌNG
+                </p>
+                <p style="color: #64748b; margin: 10px 0 0 0; line-height: 1.6;">
+                    Thông tin từ AI chỉ mang tính chất <strong>tham khảo</strong> và <strong>không thay thế</strong> 
+                    cho việc khám bệnh, tư vấn y tế trực tiếp từ bác sĩ.<br>
+                    Hãy đến cơ sở y tế gần nhất khi có triệu chứng bất thường hoặc cần hỗ trợ y tế khẩn cấp.
+                </p>
+            </div>
+            
+            <div style="border-top: 1px solid #e2e8f0; padding-top: 20px; color: #94a3b8; font-size: 13px;">
+                <p style="margin: 5px 0;">
+                    🔒 Dữ liệu được bảo mật tuyệt đối | 🚀 Powered by Google Gemini AI | 🇻🇳 Made in Vietnam
+                </p>
+                <p style="margin: 5px 0;">
+                    © 2024 Hội Thầy thuốc trẻ Việt Nam. Phát triển bởi các bác sĩ trẻ Việt Nam.
+                </p>
+                <p style="margin: 10px 0 0 0;">
+                    <a href="https://thaythuoctre.vn" target="_blank" style="color: #1d4ed8; text-decoration: none;">
+                        🌐 Truy cập website chính thức
+                    </a>
+                </p>
+            </div>
+        </div>
+        """)
+        
+        # EVENT HANDLERS
+        submit_btn.click(ask_question, inputs=question_input, outputs=answer_output)
+        question_input.submit(ask_question, inputs=question_input, outputs=answer_output)
+        clear_btn.click(lambda: ("", ""), outputs=[question_input, answer_output])
     
-    📊 **Trạng thái hệ thống:** ⚙️ Đang khởi tạo...
-    
-    ⚠️ **Lưu ý quan trọng:** 
-    - Thông tin chỉ mang tính tham khảo
-    - Không thay thế cho tư vấn y tế chuyên nghiệp  
-    - Hãy tham khảo bác sĩ khi cần thiết
-    - Giới hạn: 15 câu hỏi/phút (API miễn phí)
-    """,
-    examples=[
-        "Triệu chứng của bệnh tiểu đường là gì?",
-        "Cách phòng ngừa bệnh cao huyết áp?", 
-        "Thuốc nào điều trị viêm họng?",
-        "Chế độ ăn cho người bệnh tim mạch?",
-        "Cách sơ cứu khi bị đột quỵ?"
-    ],
-    theme=gr.themes.Soft(),
-    allow_flagging="never"
+    return interface
 )
 
 if __name__ == "__main__":
