@@ -12,200 +12,318 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import shutil
 import threading
 import time
+import signal
 
-# Setup port
+# Setup port cho Render
 port = int(os.environ.get("PORT", 7860))
 print(f"🔍 ENV PORT: {os.environ.get('PORT', 'Not set')}")
 print(f"🔍 Using port: {port}")
 
-# Load environment variables - IMPROVED API KEY HANDLING
+# Load environment variables với improved handling
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 
 if not GOOGLE_API_KEY or GOOGLE_API_KEY == "":
     print("❌ GOOGLE_API_KEY chưa được thiết lập!")
+    print("📝 Vui lòng kiểm tra Environment Variables trong Render Dashboard")
     GOOGLE_API_KEY = "dummy"
 else:
     print(f"✅ GOOGLE_API_KEY loaded: {len(GOOGLE_API_KEY)} chars")
+    if GOOGLE_API_KEY.startswith("AIza"):
+        print("✅ API Key format valid")
+    else:
+        print("⚠️ API Key format may be invalid (should start with 'AIza')")
 
-print("🚀 Khởi động Medical Chatbot cho Hội Thầy thuốc trẻ Việt Nam...")
+print("🚀 Khởi động Healthbot cho Hội Thầy thuốc trẻ Việt Nam...")
 
 # Global variables
 qa_chain = None
 vector_db = None
-initialization_status = "⚙️ Đang khởi tạo..."
+initialization_status = "⚙️ Đang khởi tạo hệ thống..."
 system_ready = False
 
+def timeout_handler(signum, frame):
+    """Handler cho timeout"""
+    raise TimeoutError("Process timeout")
+
 def initialize_system():
-    """Khởi tạo hệ thống AI - SIMPLE & STABLE"""
+    """Khởi tạo hệ thống với optimizations cho speed"""
     global qa_chain, vector_db, initialization_status, system_ready
     
-    print("🔄 STARTING SIMPLE INITIALIZATION...")
-    initialization_status = "📂 Đang quét thư mục PDF..."
+    print("\n⚡ STARTING OPTIMIZED INITIALIZATION")
+    print("=" * 50)
     
     try:
-        # Clean old ChromaDB
+        # Step 1: Clean old data
+        initialization_status = "🧹 Cleaning old data..."
         chroma_path = "chroma_db"
         if os.path.exists(chroma_path):
-            print("🧹 Cleaning old ChromaDB...")
             shutil.rmtree(chroma_path)
             print("✅ Old database cleaned")
         
-        # Load documents
+        # Step 2: Load documents with limits
+        initialization_status = "📂 Quick document scan..."
         docs = []
         data_folder = "data"
-        initialization_status = "📄 Đang tải PDF files..."
         
-        if os.path.exists(data_folder):
-            print(f"📂 Quét thư mục {data_folder}...")
-            pdf_files = [f for f in os.listdir(data_folder) if f.endswith(".pdf")]
-            
-            if pdf_files:
-                for file in pdf_files:
-                    print(f"📄 Đang tải: {file}")
-                    try:
-                        loader = PyPDFLoader(os.path.join(data_folder, file))
-                        file_docs = loader.load()
-                        for doc in file_docs:
-                            doc.metadata["source_file"] = file
-                        docs.extend(file_docs)
-                        print(f"   ✅ Thành công: {len(file_docs)} trang")
-                    except Exception as e:
-                        print(f"   ❌ Lỗi tải {file}: {e}")
-                        
-                print(f"✅ Tổng cộng: {len(docs)} trang từ {len(pdf_files)} file")
-            else:
-                print(f"⚠️ Không có file PDF trong {data_folder}")
-                initialization_status = "⚠️ Không tìm thấy PDF files"
-                return False
-        else:
-            print(f"⚠️ Thư mục {data_folder} không tồn tại")
-            initialization_status = "⚠️ Thư mục data không tồn tại"
+        if not os.path.exists(data_folder):
+            print(f"❌ Folder {data_folder} not found")
+            initialization_status = "❌ Data folder not found"
             return False
         
-        if docs and GOOGLE_API_KEY != "dummy":
-            initialization_status = "✂️ Đang chia nhỏ tài liệu..."
-            print("✂️ Chia nhỏ tài liệu...")
-            
-            # SLIGHT OPTIMIZATION - smaller chunks for better performance
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=800,     # Slightly smaller for faster processing
-                chunk_overlap=150   # Slightly less overlap
-            )
-            chunks = splitter.split_documents(docs)
-            print(f"✅ Chia thành {len(chunks)} đoạn")
-            
-            initialization_status = "🔧 Đang tạo embeddings..."
-            print("🔧 Tạo embeddings...")
-            embedding = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}
-            )
-            
-            initialization_status = "💾 Đang tạo vector database..."
-            print("💾 Tạo vector database...")
+        pdf_files = [f for f in os.listdir(data_folder) if f.endswith(".pdf")]
+        if not pdf_files:
+            print("❌ No PDF files found")
+            initialization_status = "❌ No PDF files found"
+            return False
+        
+        # OPTIMIZATION: Limit files for faster startup
+        max_files = 2
+        limited_files = pdf_files[:max_files]
+        print(f"📚 Processing {len(limited_files)} files (limited for speed)")
+        
+        initialization_status = f"📄 Loading {len(limited_files)} PDF files..."
+        
+        for i, file in enumerate(limited_files):
+            print(f"📄 Loading ({i+1}/{len(limited_files)}): {file}")
             try:
-                vector_db = Chroma.from_documents(
-                    chunks, 
-                    embedding, 
-                    persist_directory=None
-                )
-                print("✅ Vector database created successfully")
+                loader = PyPDFLoader(os.path.join(data_folder, file))
+                file_docs = loader.load()
+                
+                # OPTIMIZATION: Limit pages per file
+                max_pages = 15
+                if len(file_docs) > max_pages:
+                    file_docs = file_docs[:max_pages]
+                    print(f"   ⚡ Limited to {len(file_docs)} pages for speed")
+                
+                for doc in file_docs:
+                    doc.metadata.update({
+                        "source_file": file,
+                        "page_count": len(file_docs)
+                    })
+                
+                docs.extend(file_docs)
+                print(f"   ✅ Success: {len(file_docs)} pages")
+                
             except Exception as e:
-                print(f"❌ ChromaDB error: {e}")
-                initialization_status = f"❌ Lỗi ChromaDB: {str(e)[:50]}..."
-                return False
+                print(f"   ❌ Error loading {file}: {e}")
+                continue
+        
+        if not docs:
+            print("❌ No documents loaded successfully")
+            initialization_status = "❌ Failed to load documents"
+            return False
+        
+        print(f"✅ Total loaded: {len(docs)} pages")
+        
+        # Step 3: Text splitting with optimization
+        initialization_status = "✂️ Optimized text splitting..."
+        print("✂️ Creating optimized chunks...")
+        
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1200,        # Balanced size
+            chunk_overlap=150,      # Reasonable overlap
+            length_function=len,
+            separators=["\n\n", "\n", ". ", "! ", "? ", " "]
+        )
+        
+        chunks = splitter.split_documents(docs)
+        
+        # CRITICAL OPTIMIZATION: Hard limit chunks for vector DB speed
+        max_chunks = 80
+        if len(chunks) > max_chunks:
+            chunks = chunks[:max_chunks]
+            print(f"⚡ LIMITED to {max_chunks} chunks for optimal performance")
+        
+        print(f"✅ Using {len(chunks)} chunks")
+        
+        # Step 4: Fast embedding model
+        initialization_status = "🔧 Loading fast embedding model..."
+        print("🔧 Loading optimized embedding model...")
+        
+        embedding = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",  # Fastest model
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+        print("✅ Fast embedding model loaded")
+        
+        # Step 5: Vector database with timeout protection
+        initialization_status = "💾 Creating vector database with timeout..."
+        print(f"💾 Creating vector database ({len(chunks)} chunks)...")
+        
+        # Set timeout protection
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(90)  # 90 seconds max
+        
+        try:
+            start_time = time.time()
             
-            initialization_status = "🤖 Đang thiết lập Gemini AI..."
-            print("🤖 Thiết lập Gemini AI...")
+            vector_db = Chroma.from_documents(
+                documents=chunks,
+                embedding=embedding,
+                persist_directory=None  # In-memory for speed
+            )
             
+            elapsed = time.time() - start_time
+            signal.alarm(0)  # Cancel timeout
+            print(f"✅ Vector database created in {elapsed:.1f}s")
+            
+        except TimeoutError:
+            signal.alarm(0)
+            print("❌ Vector database creation timeout")
+            
+            # Emergency fallback: Use even fewer chunks
+            emergency_chunks = chunks[:40]
+            print(f"🚨 Emergency mode: Using only {len(emergency_chunks)} chunks")
+            
+            vector_db = Chroma.from_documents(
+                documents=emergency_chunks,
+                embedding=embedding,
+                persist_directory=None
+            )
+            print("✅ Emergency vector database created")
+            
+        except Exception as e:
+            signal.alarm(0)
+            print(f"❌ Vector database creation failed: {e}")
+            initialization_status = f"❌ Vector DB error: {str(e)[:50]}..."
+            return False
+        
+        # Step 6: Setup QA chain
+        initialization_status = "🤖 Setting up AI system..."
+        print("🤖 Setting up Gemini AI...")
+        
+        # Verify API key
+        if GOOGLE_API_KEY == "dummy":
+            print("❌ API Key not configured")
+            initialization_status = "❌ API Key not configured"
+            return False
+        
+        try:
+            # Optimized prompt
             prompt = PromptTemplate(
-                template="""Bạn là trợ lý y tế chuyên nghiệp của Hội Thầy thuốc trẻ Việt Nam.
+                template="""Bạn là trợ lý y tế AI của Hội Thầy thuốc trẻ Việt Nam.
 
 TÀI LIỆU THAM KHẢO:
 {context}
 
 CÂU HỎI: {question}
 
-HƯỚNG DẪN TRẢ LỜI:
+HƯỚNG DẪN:
 - Trả lời bằng tiếng Việt chính xác, chuyên nghiệp
-- Dựa chủ yếu vào tài liệu được cung cấp
-- Nếu không có thông tin trong tài liệu, hãy nói rõ "Thông tin này chưa có trong tài liệu tham khảo"
-- Đưa ra lời khuyên y tế cẩn trọng và khuyến khích tham khảo Thầy thuốc khi cần
-- Luôn nhắc nhở tầm quan trọng của việc tham khảo Thầy thuốc chuyên khoa
+- Dựa vào thông tin từ tài liệu được cung cấp
+- Nếu không có thông tin trong tài liệu, nói rõ "Thông tin này chưa có trong tài liệu tham khảo"
+- Đưa ra lời khuyên y tế cẩn trọng
+- Luôn khuyến khích tham khảo Thầy thuốc chuyên khoa
 
 TRẢ LỜI:""",
                 input_variables=["context", "question"]
             )
             
+            # Create LLM
             llm = ChatGoogleGenerativeAI(
                 model="gemini-1.5-pro",
                 google_api_key=GOOGLE_API_KEY,
-                temperature=0.3,
-                max_output_tokens=8192
+                temperature=0.2,
+                max_output_tokens=6144
             )
             
+            # Test LLM connection
+            print("   Testing API connection...")
+            test_response = llm.invoke("Test")
+            print(f"   ✅ API test successful: {test_response.content[:30]}...")
+            
+            # Create QA chain
             qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 retriever=vector_db.as_retriever(
-                    search_type="similarity",
-                    search_kwargs={"k": 5}  # Keep simple - no fetch_k
+                    search_kwargs={"k": 4}  # Optimized retrieval
                 ),
                 chain_type_kwargs={"prompt": prompt},
                 return_source_documents=True
             )
             
-            print("✅ Hệ thống AI đã sẵn sàng!")
-            initialization_status = "✅ Sẵn sàng trả lời câu hỏi!"
-            system_ready = True
-            return True
-        else:
-            print("⚠️ Không có tài liệu hoặc API key không hợp lệ")
-            initialization_status = "⚠️ API key không hợp lệ"
-            return False
+            print("✅ QA chain created successfully")
             
+        except Exception as llm_error:
+            print(f"❌ LLM setup failed: {llm_error}")
+            error_msg = str(llm_error).lower()
+            
+            if "api key" in error_msg or "authentication" in error_msg:
+                initialization_status = "❌ API Key authentication failed"
+            elif "quota" in error_msg or "limit" in error_msg:
+                initialization_status = "❌ API quota exceeded"
+            else:
+                initialization_status = f"❌ LLM error: {str(llm_error)[:100]}..."
+            
+            return False
+        
+        # Success!
+        print("\n" + "=" * 50)
+        print("✅ SYSTEM READY!")
+        print(f"📊 Stats: {len(docs)} pages → {len(chunks)} chunks")
+        print(f"🚀 Initialization completed successfully")
+        print("=" * 50)
+        
+        initialization_status = "✅ Sẵn sàng tư vấn y tế!"
+        system_ready = True
+        return True
+        
     except Exception as e:
-        print(f"❌ Lỗi khởi tạo hệ thống: {e}")
-        initialization_status = f"❌ Lỗi: {str(e)[:100]}..."
+        print(f"\n❌ INITIALIZATION FAILED: {e}")
+        initialization_status = f"❌ Error: {str(e)[:100]}..."
         import traceback
         traceback.print_exc()
         return False
 
 def ask_question(query):
-    """Xử lý câu hỏi từ người dùng - SIMPLE & STABLE"""
+    """Xử lý câu hỏi từ người dùng"""
     global initialization_status, system_ready
     
-    if not query.strip():
+    # Basic validation
+    if not query or not query.strip():
         return f"❓ Vui lòng nhập câu hỏi.\n\n📊 Trạng thái: {initialization_status}"
+    
+    query = query.strip()
     
     if len(query) > 1000:
         return "📝 Câu hỏi quá dài. Vui lòng rút ngắn dưới 1000 ký tự."
     
+    # Check API Key
     if GOOGLE_API_KEY == "dummy":
-        return "🔑 Lỗi API Key. Vui lòng kiểm tra cấu hình GOOGLE_API_KEY trong Environment Variables."
+        return """🔑 Lỗi API Key - Hệ thống chưa được cấu hình.
+
+📝 Hướng dẫn:
+1. Vào Render Dashboard
+2. Settings → Environment
+3. Thêm GOOGLE_API_KEY với giá trị từ Google AI Studio
+4. Redeploy service
+
+💡 API Key phải bắt đầu bằng 'AIza...'"""
     
+    # Check system readiness
     if not system_ready or not qa_chain:
         return f"""🔧 Hệ thống AI chưa sẵn sàng.
 
-📊 Trạng thái hiện tại: {initialization_status}
+📊 Trạng thái: {initialization_status}
 
-💡 Vui lòng chờ 1-2 phút để hệ thống:
-   • Load file PDF
-   • Tạo vector database 
-   • Khởi tạo AI model
-
-🔄 Thử lại sau ít phút..."""
+💡 Thời gian ước tính: 1-2 phút
+🔄 Vui lòng chờ và thử lại..."""
     
+    # Process question
     try:
-        print(f"🔍 Xử lý câu hỏi: {query[:50]}...")
+        print(f"🔍 Processing: {query[:50]}...")
         
-        # FIXED: Use invoke instead of deprecated __call__
+        start_time = time.time()
         result = qa_chain.invoke({"query": query})
+        processing_time = time.time() - start_time
         
-        answer = result["result"]
+        print(f"✅ Processed in {processing_time:.2f}s")
         
-        # Thêm thông tin nguồn
+        answer = result.get("result", "Không thể tạo câu trả lời.")
+        
+        # Add source information
         sources = result.get("source_documents", [])
         if sources:
             source_files = set()
@@ -214,7 +332,7 @@ def ask_question(query):
                     source_files.add(doc.metadata["source_file"])
             
             if source_files:
-                answer += f"\n\n📚 **Nguồn tài liệu:** {', '.join(source_files)}"
+                answer += f"\n\n📚 **Nguồn tài liệu:** {', '.join(sorted(source_files))}"
         
         # Add disclaimer
         answer += f"\n\n---\n⚠️ **Lưu ý:** Thông tin chỉ mang tính tham khảo. Hãy tham khảo Thầy thuốc chuyên khoa để được chẩn đoán và điều trị chính xác."
@@ -226,16 +344,16 @@ def ask_question(query):
         error_msg = str(e).lower()
         
         if "quota" in error_msg or "limit" in error_msg:
-            return "⚠️ Đã vượt quá giới hạn API (15 requests/phút). Vui lòng chờ và thử lại sau."
+            return "⚠️ Vượt quá giới hạn API (15 requests/phút). Vui lòng chờ 1-2 phút và thử lại."
         elif "safety" in error_msg:
-            return "⚠️ Câu hỏi có thể chứa nội dung nhạy cảm. Vui lòng diễn đạt lại câu hỏi."
-        elif "api" in error_msg or "key" in error_msg:
+            return "⚠️ Câu hỏi chứa nội dung nhạy cảm. Vui lòng diễn đạt lại."
+        elif "api" in error_msg or "authentication" in error_msg:
             return "🔑 Lỗi API Key. Vui lòng kiểm tra cấu hình GOOGLE_API_KEY."
         else:
-            return f"❌ Lỗi: {str(e)}\n\n💡 Vui lòng thử lại hoặc đặt câu hỏi khác."
+            return f"❌ Lỗi: {str(e)[:200]}...\n\n💡 Vui lòng thử lại."
 
-def create_thaythuoctre_interface():
-    """Tạo giao diện đẹp cho Hội Thầy thuốc trẻ Việt Nam"""
+def create_professional_interface():
+    """Tạo giao diện chuyên nghiệp cho Hội Thầy thuốc trẻ VN"""
     
     with gr.Blocks(
         theme=gr.themes.Soft(),
@@ -316,7 +434,7 @@ def create_thaythuoctre_interface():
         title="🏥 Hội Thầy thuốc trẻ Việt Nam - AI Medical Assistant"
     ) as interface:
         
-        # BEAUTIFUL HEADER
+        # HEADER với logo và branding
         gr.HTML("""
         <div class="custom-header">
             <div class="logo-section">
@@ -463,10 +581,12 @@ def create_thaythuoctre_interface():
                 "Vaccine COVID-19 có an toàn không?",
                 "Triệu chứng viêm gan B như thế nào?",
                 "Cách chăm sóc trẻ em bị sốt cao?",
+                "Dấu hiệu nhận biết bệnh trầm cảm?",
+                "Thuốc kháng sinh nên dùng như thế nào?"
             ],
             inputs=question_input,
             label="💡 Câu hỏi mẫu - Click để thử ngay",
-            examples_per_page=4
+            examples_per_page=5
         )
         
         # FOOTER
@@ -524,30 +644,39 @@ def create_thaythuoctre_interface():
     
     return interface
 
-# Tạo giao diện đẹp
-print("🎨 Creating beautiful interface...")
-interface = create_thaythuoctre_interface()
+# Tạo interface
+print("🎨 Creating professional interface...")
+interface = create_professional_interface()
 
+# Main execution
 if __name__ == "__main__":
-    print(f"🚀 Launching Gradio on port {port}")
-    print(f"📡 Server binding: 0.0.0.0:{port}")
+    print("\n" + "=" * 60)
+    print("🚀 LAUNCHING HEALTHBOT FOR HỘI THẦY THUỐC TRẺ VIỆT NAM")
+    print("=" * 60)
+    print(f"📡 Server: 0.0.0.0:{port}")
     print(f"🔑 API Key: {'✅ Configured' if GOOGLE_API_KEY != 'dummy' else '❌ Missing'}")
+    print(f"🤖 AI Model: Google Gemini 1.5 Pro")
+    print(f"⚡ Optimizations: Fast embedding + Limited chunks")
+    print("=" * 60)
     
-    # SIMPLE INITIALIZATION
-    print("🔥 Starting simple background initialization...")
-    init_thread = threading.Thread(target=initialize_system)
-    init_thread.daemon = True
+    # Start optimized background initialization
+    print("🔥 Starting optimized initialization...")
+    init_thread = threading.Thread(target=initialize_system, daemon=True)
     init_thread.start()
     
+    # Small delay for thread to start
     time.sleep(0.5)
     
+    # Launch interface
     try:
+        print("🌟 Launching interface...")
         interface.launch(
             server_name="0.0.0.0",
             server_port=port,
             share=False,
             show_error=True
         )
+        
     except Exception as e:
         print(f"❌ Launch failed: {e}")
         try:
@@ -556,5 +685,5 @@ if __name__ == "__main__":
                 server_port=port
             )
         except Exception as e2:
-            print(f"❌ Second launch failed: {e2}")
-            sys.exit
+            print(f"❌ Fallback launch failed: {e2}")
+            sys.exit(1)
