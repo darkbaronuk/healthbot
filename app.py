@@ -34,11 +34,11 @@ initialization_status = "⚙️ Đang khởi tạo..."
 system_ready = False
 
 def initialize_system():
-    """Khởi tạo hệ thống AI"""
+    """Khởi tạo hệ thống AI tối ưu cho Standard Plan (2GB RAM)"""
     global qa_chain, vector_db, initialization_status, system_ready
     
-    print("🔄 FORCE INIT: Starting system initialization...")
-    initialization_status = "📂 Đang quét thư mục PDF..."
+    print("🔄 FORCE INIT: Starting optimized system initialization for Standard Plan...")
+    initialization_status = "📂 Đang quét thư mục PDF (Standard Plan - 2GB RAM)..."
     
     try:
         # Clean old ChromaDB
@@ -51,13 +51,14 @@ def initialize_system():
         # Load documents
         docs = []
         data_folder = "data"
-        initialization_status = "📄 Đang tải PDF files..."
+        initialization_status = "📄 Đang tải PDF files (tối ưu cho 2GB RAM)..."
         
         if os.path.exists(data_folder):
             print(f"📂 Quét thư mục {data_folder}...")
             pdf_files = [f for f in os.listdir(data_folder) if f.endswith(".pdf")]
             
             if pdf_files:
+                # Process files with optimized settings for Standard Plan
                 for file in pdf_files:
                     print(f"📄 Đang tải: {file}")
                     try:
@@ -65,6 +66,7 @@ def initialize_system():
                         file_docs = loader.load()
                         for doc in file_docs:
                             doc.metadata["source_file"] = file
+                            doc.metadata["plan"] = "standard_2gb"
                         docs.extend(file_docs)
                         print(f"   ✅ Thành công: {len(file_docs)} trang")
                     except Exception as e:
@@ -81,30 +83,34 @@ def initialize_system():
             return False
         
         if docs and GOOGLE_API_KEY != "dummy":
-            initialization_status = "✂️ Đang chia nhỏ tài liệu..."
-            print("✂️ Chia nhỏ tài liệu...")
+            initialization_status = "✂️ Đang chia nhỏ tài liệu (tối ưu cho 2GB RAM)..."
+            print("✂️ Chia nhỏ tài liệu với cấu hình tối ưu...")
+            
+            # Optimized settings for Standard Plan
             splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000, 
-                chunk_overlap=200
+                chunk_size=1000,    # Standard chunk size for 2GB RAM
+                chunk_overlap=200,  # Good overlap for context
+                length_function=len,
+                separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""]
             )
             chunks = splitter.split_documents(docs)
             print(f"✅ Chia thành {len(chunks)} đoạn")
             
-            initialization_status = "🔧 Đang tạo embeddings..."
-            print("🔧 Tạo embeddings...")
+            initialization_status = "🔧 Đang tạo embeddings (Standard Plan)..."
+            print("🔧 Tạo embeddings với cấu hình tối ưu...")
             embedding = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
                 model_kwargs={'device': 'cpu'},
                 encode_kwargs={'normalize_embeddings': True}
             )
             
-            initialization_status = "💾 Đang tạo vector database..."
+            initialization_status = "💾 Đang tạo vector database (2GB RAM)..."
             print("💾 Tạo vector database...")
             try:
                 vector_db = Chroma.from_documents(
                     chunks, 
                     embedding, 
-                    persist_directory=None
+                    persist_directory=None  # Use memory for better performance on Standard Plan
                 )
                 print("✅ Vector database created successfully")
             except Exception as e:
@@ -117,7 +123,7 @@ def initialize_system():
             
             prompt = PromptTemplate(
                 template="""
-Bạn là trợ lý y tế chuyên nghiệp của Bộ Y tế Việt Nam.
+Bạn là trợ lý y tế AI chuyên nghiệp của Hội Thầy thuốc trẻ Việt Nam.
 
 TÀI LIỆU THAM KHẢO:
 {context}
@@ -128,7 +134,7 @@ HƯỚNG DẪN TRẢ LỜI:
 - Trả lời bằng tiếng Việt chính xác, chuyên nghiệp
 - Dựa chủ yếu vào tài liệu được cung cấp
 - Nếu không có thông tin trong tài liệu, hãy nói rõ "Thông tin này chưa có trong tài liệu tham khảo"
-- Đưa ra lời khuyên y tế cẩn trọng và khuyến khích tham khảo bác sĩ khi cần
+- Đưa ra lời khuyên y tế cẩn trọng và khuyến khích tham khảo Thầy thuốc khi cần
 
 TRẢ LỜI:""",
                 input_variables=["context", "question"]
@@ -141,18 +147,19 @@ TRẢ LỜI:""",
                 max_output_tokens=8192
             )
             
+            # Optimized retriever for Standard Plan
             qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 retriever=vector_db.as_retriever(
                     search_type="similarity",
-                    search_kwargs={"k": 5}
+                    search_kwargs={"k": 5, "fetch_k": 20}  # Better results with more candidates
                 ),
                 chain_type_kwargs={"prompt": prompt},
                 return_source_documents=True
             )
             
-            print("✅ Hệ thống AI đã sẵn sàng!")
-            initialization_status = "✅ Sẵn sàng trả lời câu hỏi!"
+            print("✅ Hệ thống AI đã sẵn sàng cho Standard Plan!")
+            initialization_status = "✅ Sẵn sàng trả lời câu hỏi (Standard Plan - 2GB RAM)!"
             system_ready = True
             return True
         else:
@@ -185,12 +192,12 @@ def ask_question(query):
 
 📊 Trạng thái hiện tại: {initialization_status}
 
-💡 Vui lòng chờ 2-3 phút để system:
-   • Load file PDF (36 trang)
-   • Tạo vector database 
-   • Khởi tạo AI model
+💡 Hệ thống đang tối ưu cho Standard Plan (2GB RAM):
+   • Load file PDF và tạo vector database
+   • Khởi tạo AI model với cấu hình tối ưu
+   • Ước tính thời gian: 1-2 phút
 
-🔄 Thử lại sau ít phút..."""
+🔄 Vui lòng chờ và thử lại..."""
     
     try:
         print(f"🔍 Xử lý câu hỏi: {query[:50]}...")
@@ -223,6 +230,7 @@ def ask_question(query):
             return f"❌ Lỗi: {str(e)}\n\n💡 Vui lòng thử lại hoặc đặt câu hỏi khác."
 
 def create_thaythuoctre_interface():
+    """Tạo interface với logo thật và font trắng cho Hội Thầy thuốc trẻ VN"""
     with gr.Blocks(
         theme=gr.themes.Soft(), 
         css="""
@@ -249,14 +257,19 @@ def create_thaythuoctre_interface():
         .logo-circle {
             width: 85px;
             height: 85px;
-            background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+            background: white;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 45px;
             box-shadow: 0 8px 25px rgba(0,0,0,0.15);
             border: 3px solid rgba(255,255,255,0.3);
+            padding: 8px;
+        }
+        .logo-circle img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
         }
         .info-card {
             background: white;
@@ -287,51 +300,50 @@ def create_thaythuoctre_interface():
         title="🏥 Hội Thầy thuốc trẻ Việt Nam - AI Assistant"
     ) as interface:
         
-        # CUSTOM HEADER
-gr.HTML("""
-<div class="custom-header">
-    <div class="logo-section">
-        <div style="width: 85px; height: 85px; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 25px rgba(0,0,0,0.15); border: 3px solid rgba(255,255,255,0.3); padding: 8px;">
-            <img src="http://thaythuoctre.vn/wp-content/uploads/2020/12/logo-ttt.png" 
-                 alt="Logo Hội Thầy thuốc trẻ VN" 
-                 style="width: 100%; height: 100%; object-fit: contain; border-radius: 50%;">
-        </div>
-        <div style="text-align: center;">
-            <h1 style="margin: 0; font-size: 32px; font-weight: 800; color: white; text-shadow: 2px 2px 6px rgba(0,0,0,0.3); letter-spacing: -0.5px;">
-                HỘI THẦY THUỐC TRẺ VIỆT NAM
-            </h1>
-            <p style="margin: 10px 0 0 0; font-size: 18px; color: white; opacity: 0.95; font-weight: 400;">
-                🤖 Trợ lý Y tế AI - Tư vấn sức khỏe thông minh 24/7
-            </p>
-            <p style="margin: 8px 0 0 0; font-size: 14px; color: white; opacity: 0.9;">
-                Được phát triển bởi các bác sĩ trẻ Việt Nam
-            </p>
-        </div>
-    </div>
-    
-    <div style="background: rgba(255,255,255,0.15); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px);">
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; text-align: center;">
-            <div>
-                <div style="font-size: 24px; margin-bottom: 5px;">🌐</div>
-                <strong style="color: white;">Website chính thức</strong><br>
-                <a href="https://thaythuoctre.vn" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600;">
-                    thaythuoctre.vn
-                </a>
+        # CUSTOM HEADER VỚI LOGO THẬT VÀ FONT TRẮNG
+        gr.HTML("""
+        <div class="custom-header">
+            <div class="logo-section">
+                <div class="logo-circle">
+                    <img src="http://thaythuoctre.vn/wp-content/uploads/2020/12/logo-ttt.png" 
+                         alt="Logo Hội Thầy thuốc trẻ VN">
+                </div>
+                <div style="text-align: center;">
+                    <h1 style="margin: 0; font-size: 32px; font-weight: 800; color: white; text-shadow: 2px 2px 6px rgba(0,0,0,0.3); letter-spacing: -0.5px;">
+                        HỘI THẦY THUỐC TRẺ VIỆT NAM
+                    </h1>
+                    <p style="margin: 10px 0 0 0; font-size: 18px; color: white; opacity: 0.95; font-weight: 400;">
+                        🤖 Trợ lý Y tế AI - Tư vấn sức khỏe thông minh 24/7
+                    </p>
+                    <p style="margin: 8px 0 0 0; font-size: 14px; color: white; opacity: 0.9;">
+                        Được phát triển bởi các Thầy thuốc trẻ Việt Nam
+                    </p>
+                </div>
             </div>
-            <div>
-                <div style="font-size: 24px; margin-bottom: 5px;">🤖</div>
-                <strong style="color: white;">AI Technology</strong><br>
-                <span style="color: #34d399; font-weight: 600;">Google Gemini Pro</span>
-            </div>
-            <div>
-                <div style="font-size: 24px; margin-bottom: 5px;">📚</div>
-                <strong style="color: white;">Nguồn dữ liệu</strong><br>
-                <span style="color: #f87171; font-weight: 600;">Bộ Y tế Việt Nam</span>
+            
+            <div style="background: rgba(255,255,255,0.15); padding: 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px);">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; text-align: center;">
+                    <div>
+                        <div style="font-size: 24px; margin-bottom: 5px;">🌐</div>
+                        <strong style="color: white;">Website chính thức</strong><br>
+                        <a href="https://thaythuoctre.vn" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600;">
+                            thaythuoctre.vn
+                        </a>
+                    </div>
+                    <div>
+                        <div style="font-size: 24px; margin-bottom: 5px;">🤖</div>
+                        <strong style="color: white;">AI Technology</strong><br>
+                        <span style="color: #34d399; font-weight: 600;">Google Gemini Pro</span>
+                    </div>
+                    <div>
+                        <div style="font-size: 24px; margin-bottom: 5px;">📚</div>
+                        <strong style="color: white;">Nguồn dữ liệu</strong><br>
+                        <span style="color: #f87171; font-weight: 600;">Bộ Y tế Việt Nam</span>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
-</div>
-""")
+        """)
         
         # MAIN INTERFACE
         with gr.Row():
@@ -346,18 +358,22 @@ gr.HTML("""
                 
                 with gr.Row():
                     submit_btn = gr.Button(
-                        "🔍 Tư vấn với AI Doctor", 
+                        "🔍 Tư vấn với Thầy thuốc AI", 
                         variant="primary", 
                         size="lg"
                     )
                     clear_btn = gr.Button("🗑️ Xóa", variant="secondary")
             
             with gr.Column(scale=1):
-                # THÔNG TIN HỘI
+                # THÔNG TIN HỘI VỚI LOGO THẬT
                 gr.HTML(f"""
                 <div class="info-card">
                     <div style="text-align: center; margin-bottom: 20px;">
-                        <div style="width: 50px; height: 50px; background: linear-gradient(135deg, #1e40af, #1d4ed8); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: white; font-size: 24px; margin-bottom: 10px;">👨‍⚕️</div>
+                        <div style="width: 50px; height: 50px; background: white; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 10px; padding: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                            <img src="http://thaythuoctre.vn/wp-content/uploads/2020/12/logo-ttt.png" 
+                                 alt="Logo TTT" 
+                                 style="width: 100%; height: 100%; object-fit: contain;">
+                        </div>
                         <h3 style="color: #1e40af; margin: 0; font-size: 18px; font-weight: 700;">
                             Hội Thầy thuốc trẻ Việt Nam
                         </h3>
@@ -390,6 +406,11 @@ gr.HTML("""
                                 {initialization_status}
                             </span>
                         </div>
+                        
+                        <div style="background: #e0f2fe; padding: 12px; border-radius: 8px; border-left: 4px solid #0891b2;">
+                            <strong style="color: #0891b2;">🚀 Plan:</strong><br>
+                            <span style="color: #0f766e; font-weight: 600;">Standard (2GB RAM)</span>
+                        </div>
                     </div>
                     
                     <div class="stat-grid">
@@ -412,7 +433,7 @@ gr.HTML("""
         # OUTPUT
         answer_output = gr.Textbox(
             lines=12,
-            label="🩺 Tư vấn từ AI Doctor",
+            label="🩺 Tư vấn từ Thầy thuốc AI",
             show_copy_button=True,
             interactive=False,
             placeholder="Câu trả lời từ AI sẽ hiển thị ở đây..."
@@ -435,17 +456,21 @@ gr.HTML("""
             examples_per_page=4
         )
         
-        # FOOTER
+        # FOOTER VỚI LOGO THẬT
         gr.HTML("""
         <div style="background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); padding: 30px; border-radius: 20px; margin-top: 30px; border-top: 4px solid #1d4ed8; text-align: center;">
             <div style="display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 20px; flex-wrap: wrap;">
-                <div style="width: 50px; height: 50px; background: linear-gradient(135deg, #1e40af, #1d4ed8); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 24px;">👨‍⚕️</div>
+                <div style="width: 50px; height: 50px; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                    <img src="http://thaythuoctre.vn/wp-content/uploads/2020/12/logo-ttt.png" 
+                         alt="Logo TTT" 
+                         style="width: 100%; height: 100%; object-fit: contain;">
+                </div>
                 <div>
                     <h4 style="margin: 0; color: #1e40af; font-size: 20px; font-weight: 700;">
                         Hội Thầy thuốc trẻ Việt Nam
                     </h4>
                     <p style="margin: 5px 0 0 0; color: #64748b; font-size: 14px;">
-                        Young Vietnamese Doctors Association
+                        Vietnam Young Physicians' Association
                     </p>
                 </div>
             </div>
@@ -455,8 +480,8 @@ gr.HTML("""
                     ⚠️ LưU Ý QUAN TRỌNG
                 </p>
                 <p style="color: #64748b; margin: 10px 0 0 0; line-height: 1.6;">
-                    Thông tin từ AI chỉ mang tính chất <strong>tham khảo</strong> và <strong>không thay thế</strong> 
-                    cho việc khám bệnh, tư vấn y tế trực tiếp từ bác sĩ.<br>
+                    Thông tin tư vấn từ AI chỉ mang tính chất <strong>tham khảo</strong> và <strong>không thay thế</strong> 
+                    cho việc khám bệnh, tư vấn y tế trực tiếp từ Thầy thuốc.<br>
                     Hãy đến cơ sở y tế gần nhất khi có triệu chứng bất thường hoặc cần hỗ trợ y tế khẩn cấp.
                 </p>
             </div>
@@ -466,7 +491,7 @@ gr.HTML("""
                     🔒 Dữ liệu được bảo mật tuyệt đối | 🚀 Powered by Google Gemini AI | 🇻🇳 Made in Vietnam
                 </p>
                 <p style="margin: 5px 0;">
-                    © 2024 Hội Thầy thuốc trẻ Việt Nam. Phát triển bởi các bác sĩ trẻ Việt Nam.
+                    © 2024 Hội Thầy thuốc trẻ Việt Nam. Phát triển bởi các Thầy thuốc trẻ Việt Nam.
                 </p>
                 <p style="margin: 10px 0 0 0;">
                     <a href="https://thaythuoctre.vn" target="_blank" style="color: #1d4ed8; text-decoration: none;">
@@ -490,9 +515,10 @@ interface = create_thaythuoctre_interface()
 if __name__ == "__main__":
     print(f"🚀 Launching Gradio on port {port}")
     print(f"📡 Server binding: 0.0.0.0:{port}")
+    print(f"💾 Optimized for Standard Plan (2GB RAM)")
     
     # FORCE start initialization BEFORE launch
-    print("🔥 STARTING FORCED INITIALIZATION...")
+    print("🔥 STARTING FORCED INITIALIZATION FOR STANDARD PLAN...")
     init_thread = threading.Thread(target=initialize_system)
     init_thread.daemon = True
     init_thread.start()
