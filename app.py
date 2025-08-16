@@ -194,7 +194,7 @@ def ask_question(query):
     
     try:
         print(f"🔍 Xử lý câu hỏi: {query[:50]}...")
-        result = qa_chain({"query": query})
+        result = qa_chain.invoke({"query": query})
         
         answer = result["result"]
         
@@ -222,9 +222,6 @@ def ask_question(query):
         else:
             return f"❌ Lỗi: {str(e)}\n\n💡 Vui lòng thử lại hoặc đặt câu hỏi khác."
 
-# Tạo giao diện Gradio
-print("🎨 Tạo giao diện Gradio...")
-interface = create_thaythuoctre_interface()
 def create_thaythuoctre_interface():
     with gr.Blocks(
         theme=gr.themes.Soft(), 
@@ -281,19 +278,6 @@ def create_thaythuoctre_interface():
             border-radius: 8px;
             text-align: center;
             border: 1px solid #e2e8f0;
-        }
-        .submit-btn {
-            background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%) !important;
-            border: none !important;
-            color: white !important;
-            font-weight: 600 !important;
-            padding: 12px 24px !important;
-            border-radius: 12px !important;
-            transition: all 0.3s ease !important;
-        }
-        .submit-btn:hover {
-            transform: translateY(-2px) !important;
-            box-shadow: 0 8px 25px rgba(29, 78, 216, 0.4) !important;
         }
         @media (max-width: 768px) {
             .logo-section { flex-direction: column; gap: 15px; }
@@ -495,7 +479,9 @@ def create_thaythuoctre_interface():
         clear_btn.click(lambda: ("", ""), outputs=[question_input, answer_output])
     
     return interface
-)
+
+# Tạo interface
+interface = create_thaythuoctre_interface()
 
 if __name__ == "__main__":
     print(f"🚀 Launching Gradio on port {port}")
