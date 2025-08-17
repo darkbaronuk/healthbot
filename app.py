@@ -12,30 +12,12 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import shutil
 import threading
 import time
-import gc
-import psutil
 from queue import Queue
-import logging
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Setup port cho Render
 port = int(os.environ.get("PORT", 7860))
 print(f"🔍 ENV PORT: {os.environ.get('PORT', 'Not set')}")
 print(f"🔍 Using port: {port}")
-
-# Memory monitoring
-def get_memory_usage():
-    """Get current memory usage in MB"""
-    process = psutil.Process(os.getpid())
-    return process.memory_info().rss / 1024 / 1024
-
-def force_garbage_collection():
-    """Force garbage collection to free memory"""
-    gc.collect()
-    time.sleep(0.1)  # Small delay for GC to complete
 
 # Load environment variables
 load_dotenv()
@@ -46,221 +28,68 @@ if not GOOGLE_API_KEY or GOOGLE_API_KEY == "":
     GOOGLE_API_KEY = "dummy"
 else:
     print(f"✅ GOOGLE_API_KEY loaded: {len(GOOGLE_API_KEY)} chars")
+    if GOOGLE_API_KEY.startswith("AIza"):
+        print("✅ API Key format valid")
+    else:
+        print("⚠️ API Key format may be invalid")
 
-print("🚀 Khởi động Full Data Medical AI cho Hội Thầy thuốc trẻ Việt Nam...")
-print(f"💾 System RAM: {psutil.virtual_memory().total / 1024 / 1024 / 1024:.1f}GB")
-print(f"💾 Available RAM: {psutil.virtual_memory().available / 1024 / 1024 / 1024:.1f}GB")
+print("🚀 Khởi động Medical AI cho Hội Thầy thuốc trẻ Việt Nam...")
 
 # Global variables
 qa_chain = None
 vector_db = None
-initialization_status = "⚙️ Đang khởi tạo hệ thống full data..."
+initialization_status = "⚙️ Đang khởi tạo hệ thống..."
 system_ready = False
-total_documents = 0
+total_files = 0
 total_chunks = 0
-processed_files = []
-loading_progress = ""
 
-def load_documents_in_batches(data_folder, batch_size=5):
-    """Load documents in batches để tránh memory overflow"""
-    global loading_progress, processed_files
+def create_vector_db_with_timeout(chunks, embedding, timeout_seconds=120):
+    """Tạo vector database với timeout protection"""
     
-    pdf_files = [f for f in os.listdir(data_folder) if f.endswith(".pdf")]
-    pdf_files.sort()  # Sort để có thứ tự consistent
+    def worker(result_queue):
+        try:
+            start_time = time.time()
+            print(f"💾 Creating vector database with {len(chunks)} chunks...")
+            
+            vector_db = Chroma.from_documents(
+                documents=chunks,
+                embedding=embedding,
+                persist_directory=None
+            )
+            
+            elapsed = time.time() - start_time
+            result_queue.put(('success', vector_db, elapsed))
+            
+        except Exception as e:
+            result_queue.put(('error', str(e), 0))
     
-    print(f"📂 Found {len(pdf_files)} PDF files")
-    print(f"📁 Files: {pdf_files[:10]}{'...' if len(pdf_files) > 10 else ''}")
+    result_queue = Queue()
+    worker_thread = threading.Thread(target=worker, args=(result_queue,), daemon=True)
     
-    all_docs = []
-    processed_files = []
+    worker_thread.start()
+    worker_thread.join(timeout=timeout_seconds)
     
-    # Process files in batches
-    for batch_start in range(0, len(pdf_files), batch_size):
-        batch_end = min(batch_start + batch_size, len(pdf_files))
-        batch_files = pdf_files[batch_start:batch_end]
-        
-        print(f"\n📦 Processing batch {batch_start//batch_size + 1}/{(len(pdf_files)-1)//batch_size + 1}")
-        print(f"   Files: {batch_files}")
-        
-        loading_progress = f"Batch {batch_start//batch_size + 1}/{(len(pdf_files)-1)//batch_size + 1}: {batch_files[0]}..."
-        
-        batch_docs = []
-        for file in batch_files:
-            try:
-                print(f"   📄 Loading: {file}")
-                loader = PyPDFLoader(os.path.join(data_folder, file))
-                file_docs = loader.load()
-                
-                # Intelligent page selection based on file size
-                total_pages = len(file_docs)
-                if total_pages <= 10:
-                    # Small files: take all pages
-                    selected_docs = file_docs
-                elif total_pages <= 50:
-                    # Medium files: take every other page
-                    selected_docs = file_docs[::2]
-                else:
-                    # Large files: intelligent sampling
-                    # Take first 10, middle 20, last 10
-                    first_part = file_docs[:10]
-                    middle_start = total_pages // 2 - 10
-                    middle_part = file_docs[middle_start:middle_start + 20]
-                    last_part = file_docs[-10:]
-                    selected_docs = first_part + middle_part + last_part
-                
-                # Add metadata
-                for i, doc in enumerate(selected_docs):
-                    doc.metadata.update({
-                        "source_file": file,
-                        "original_page_count": total_pages,
-                        "selected_page_count": len(selected_docs),
-                        "file_index": batch_start + batch_files.index(file),
-                        "page_in_selection": i
-                    })
-                
-                batch_docs.extend(selected_docs)
-                processed_files.append(file)
-                print(f"   ✅ {file}: {len(selected_docs)}/{total_pages} pages")
-                
-            except Exception as e:
-                print(f"   ❌ Error loading {file}: {e}")
-                continue
-        
-        all_docs.extend(batch_docs)
-        
-        # Memory check after each batch
-        memory_mb = get_memory_usage()
-        print(f"   💾 Memory usage: {memory_mb:.1f}MB")
-        
-        if memory_mb > 1500:  # If using more than 1.5GB, force GC
-            print("   🧹 High memory usage, forcing garbage collection...")
-            force_garbage_collection()
-            memory_after = get_memory_usage()
-            print(f"   💾 Memory after GC: {memory_after:.1f}MB")
-        
-        # Small delay between batches
-        time.sleep(0.5)
-    
-    return all_docs
-
-def create_chunks_with_memory_management(docs):
-    """Create text chunks với memory management"""
-    print(f"\n✂️ Creating chunks from {len(docs)} documents...")
-    
-    # Adaptive chunk size based on total document count
-    if len(docs) > 500:
-        chunk_size = 800
-        chunk_overlap = 100
-    elif len(docs) > 200:
-        chunk_size = 1000
-        chunk_overlap = 150
-    else:
-        chunk_size = 1200
-        chunk_overlap = 200
-    
-    print(f"   📏 Chunk size: {chunk_size}, overlap: {chunk_overlap}")
-    
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
-        separators=["\n\n", "\n", ". ", "! ", "? ", ", ", " "]
-    )
-    
-    # Process documents in batches to manage memory
-    all_chunks = []
-    batch_size = 50
-    
-    for i in range(0, len(docs), batch_size):
-        batch = docs[i:i + batch_size]
-        print(f"   📦 Chunking batch {i//batch_size + 1}/{(len(docs)-1)//batch_size + 1}")
-        
-        batch_chunks = splitter.split_documents(batch)
-        all_chunks.extend(batch_chunks)
-        
-        # Memory management
-        if i % 100 == 0:  # Every 100 docs, check memory
-            memory_mb = get_memory_usage()
-            if memory_mb > 1400:
-                force_garbage_collection()
-    
-    print(f"✅ Created {len(all_chunks)} chunks total")
-    return all_chunks
-
-def create_vector_db_progressive(chunks, embedding, max_memory_mb=1600):
-    """Create vector DB progressively để avoid memory issues"""
-    
-    print(f"💾 Creating vector DB with {len(chunks)} chunks...")
-    print(f"💾 Memory limit: {max_memory_mb}MB")
-    
-    # Determine batch size based on available memory
-    memory_mb = get_memory_usage()
-    available_memory = max_memory_mb - memory_mb
-    
-    if available_memory < 200:
-        batch_size = 25
-    elif available_memory < 400:
-        batch_size = 50
-    else:
-        batch_size = 100
-    
-    print(f"💾 Using batch size: {batch_size}")
-    
-    vector_db = None
-    processed_chunks = 0
+    if worker_thread.is_alive():
+        print("⚠️ Vector database creation timeout - trying emergency mode")
+        return None, "timeout"
     
     try:
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            total_batches = (len(chunks) - 1) // batch_size + 1
-            
-            print(f"   📦 Processing vector batch {batch_num}/{total_batches} ({len(batch)} chunks)")
-            
-            if vector_db is None:
-                # Create initial vector DB
-                vector_db = Chroma.from_documents(
-                    documents=batch,
-                    embedding=embedding,
-                    persist_directory=None
-                )
-            else:
-                # Add to existing vector DB
-                vector_db.add_documents(batch)
-            
-            processed_chunks += len(batch)
-            
-            # Memory monitoring
-            memory_mb = get_memory_usage()
-            print(f"   💾 Memory: {memory_mb:.1f}MB, Processed: {processed_chunks}/{len(chunks)}")
-            
-            # Force GC if memory is high
-            if memory_mb > max_memory_mb * 0.9:
-                print("   🧹 High memory, forcing GC...")
-                force_garbage_collection()
-            
-            # Small delay between batches
-            time.sleep(0.2)
-        
-        print(f"✅ Vector DB created successfully with {processed_chunks} chunks")
-        return vector_db, 'success'
-        
-    except Exception as e:
-        print(f"❌ Vector DB creation failed: {e}")
-        return None, str(e)
+        result_type, result_data, elapsed = result_queue.get_nowait()
+        if result_type == 'success':
+            print(f"✅ Vector database created in {elapsed:.1f}s")
+            return result_data, 'success'
+        else:
+            print(f"❌ Vector database creation failed: {result_data}")
+            return None, result_data
+    except:
+        return None, "queue_error"
 
 def initialize_system():
-    """Initialize system với full data support cho Render Standard"""
-    global qa_chain, vector_db, initialization_status, system_ready, total_documents, total_chunks, loading_progress
+    """Khởi tạo hệ thống"""
+    global qa_chain, vector_db, initialization_status, system_ready, total_files, total_chunks
     
-    start_time = time.time()
-    
-    print("\n🚀 STARTING FULL DATA INITIALIZATION FOR RENDER STANDARD")
-    print("=" * 60)
-    print(f"💾 Target: Load ALL files from data folder")
-    print(f"💾 Memory limit: 1.6GB (safe for 2GB system)")
-    print(f"⚡ Optimization: Batch processing + Intelligent sampling")
-    print("=" * 60)
+    print("\n⚡ STARTING SYSTEM INITIALIZATION")
+    print("=" * 50)
     
     try:
         # Step 1: Clean old data
@@ -268,96 +97,142 @@ def initialize_system():
         chroma_path = "chroma_db"
         if os.path.exists(chroma_path):
             shutil.rmtree(chroma_path)
-        force_garbage_collection()
+            print("✅ Old database cleaned")
         
-        # Step 2: Check data folder
+        # Step 2: Load documents
+        initialization_status = "📂 Loading documents..."
+        docs = []
         data_folder = "data"
+        
         if not os.path.exists(data_folder):
             print(f"❌ Folder {data_folder} not found")
             initialization_status = "❌ Data folder not found"
             return False
         
-        # Get folder info
         pdf_files = [f for f in os.listdir(data_folder) if f.endswith(".pdf")]
         if not pdf_files:
             print("❌ No PDF files found")
             initialization_status = "❌ No PDF files found"
             return False
         
+        # Process all files but limit pages per file
         total_files = len(pdf_files)
-        folder_size_mb = sum(os.path.getsize(os.path.join(data_folder, f)) for f in pdf_files) / 1024 / 1024
+        max_pages_per_file = 15 if total_files > 20 else 25
         
-        print(f"📁 Found {total_files} PDF files ({folder_size_mb:.1f}MB total)")
+        print(f"📚 Processing {total_files} files, max {max_pages_per_file} pages each")
+        initialization_status = f"📄 Loading {total_files} PDF files..."
         
-        # Step 3: Load ALL documents in batches
-        initialization_status = f"📂 Loading ALL {total_files} files in batches..."
-        print(f"📂 Loading ALL {total_files} files with intelligent sampling...")
-        
-        docs = load_documents_in_batches(data_folder, batch_size=3)  # Smaller batch for safety
+        for i, file in enumerate(pdf_files):
+            print(f"📄 Loading ({i+1}/{total_files}): {file}")
+            try:
+                loader = PyPDFLoader(os.path.join(data_folder, file))
+                file_docs = loader.load()
+                
+                # Limit pages per file
+                if len(file_docs) > max_pages_per_file:
+                    file_docs = file_docs[:max_pages_per_file]
+                    print(f"   ⚡ Using first {len(file_docs)} pages")
+                
+                for doc in file_docs:
+                    doc.metadata.update({
+                        "source_file": file,
+                        "page_count": len(file_docs),
+                        "file_index": i
+                    })
+                
+                docs.extend(file_docs)
+                print(f"   ✅ Success: {len(file_docs)} pages")
+                
+            except Exception as e:
+                print(f"   ❌ Error loading {file}: {e}")
+                continue
         
         if not docs:
-            initialization_status = "❌ Failed to load any documents"
+            print("❌ No documents loaded successfully")
+            initialization_status = "❌ Failed to load documents"
             return False
         
-        total_documents = len(docs)
-        print(f"✅ Loaded {total_documents} pages from {len(processed_files)} files")
+        print(f"✅ Total loaded: {len(docs)} pages from {total_files} files")
         
-        # Step 4: Create chunks with memory management
-        initialization_status = "✂️ Creating chunks with memory management..."
-        chunks = create_chunks_with_memory_management(docs)
+        # Step 3: Create chunks
+        initialization_status = "✂️ Creating text chunks..."
+        print("✂️ Creating optimized chunks...")
         
-        if not chunks:
-            initialization_status = "❌ Failed to create chunks"
-            return False
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", "! ", "? ", " "]
+        )
+        
+        chunks = splitter.split_documents(docs)
+        
+        # Limit total chunks for performance
+        max_chunks = 300
+        if len(chunks) > max_chunks:
+            chunks = chunks[:max_chunks]
+            print(f"⚡ Limited to {max_chunks} chunks for optimal performance")
         
         total_chunks = len(chunks)
-        print(f"✅ Created {total_chunks} chunks")
+        print(f"✅ Using {total_chunks} optimized chunks")
         
-        # Clear docs from memory
-        del docs
-        force_garbage_collection()
-        
-        # Step 5: Load embedding model
-        initialization_status = "🔧 Loading optimized embedding model..."
-        print("🔧 Loading memory-efficient embedding model...")
+        # Step 4: Load embedding model
+        initialization_status = "🔧 Loading embedding model..."
+        print("🔧 Loading embedding model...")
         
         try:
             embedding = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/all-MiniLM-L6-v2",
                 model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True, 'batch_size': 16}  # Smaller batch
+                encode_kwargs={'normalize_embeddings': True}
             )
             print("✅ Embedding model loaded")
         except Exception as e:
-            print(f"❌ Embedding model failed: {e}")
-            initialization_status = f"❌ Embedding error: {str(e)[:50]}..."
+            print(f"❌ Embedding model loading failed: {e}")
+            initialization_status = f"❌ Embedding model error: {str(e)[:50]}..."
             return False
         
-        # Step 6: Create vector database progressively
-        initialization_status = "💾 Building comprehensive vector database..."
-        vector_db, status = create_vector_db_progressive(chunks, embedding)
+        # Step 5: Create vector database
+        initialization_status = "💾 Building vector database..."
+        print(f"💾 Building vector database ({total_chunks} chunks)...")
         
-        if status != 'success':
+        vector_db, status = create_vector_db_with_timeout(chunks, embedding, timeout_seconds=120)
+        
+        if status == 'timeout':
+            # Emergency mode
+            emergency_chunks = chunks[:100]
+            print(f"🚨 Emergency mode: Using only {len(emergency_chunks)} chunks")
+            
+            try:
+                vector_db = Chroma.from_documents(
+                    documents=emergency_chunks,
+                    embedding=embedding,
+                    persist_directory=None
+                )
+                total_chunks = len(emergency_chunks)
+                print("✅ Emergency vector database created")
+            except Exception as e:
+                print(f"❌ Emergency vector DB also failed: {e}")
+                initialization_status = f"❌ Vector DB failed: {str(e)[:50]}..."
+                return False
+                
+        elif status != 'success':
+            print(f"❌ Vector database creation failed: {status}")
             initialization_status = f"❌ Vector DB error: {status[:50]}..."
             return False
         
-        # Clear chunks from memory
-        del chunks
-        force_garbage_collection()
-        
-        # Step 7: Setup AI system
+        # Step 6: Setup AI system
         if GOOGLE_API_KEY == "dummy":
+            print("❌ API Key not configured")
             initialization_status = "❌ API Key not configured"
             return False
         
-        initialization_status = "🤖 Setting up enhanced AI system..."
-        print("🤖 Setting up Gemini AI with full data support...")
+        initialization_status = "🤖 Setting up AI system..."
+        print("🤖 Setting up Gemini AI...")
         
         try:
             prompt = PromptTemplate(
-                template="""Bạn là trợ lý y tế AI chuyên nghiệp của Hội Thầy thuốc trẻ Việt Nam với quyền truy cập vào cơ sở dữ liệu y khoa toàn diện.
-
-CƠ SỞ DỮ LIỆU: {total_files} files y khoa đã được xử lý với {total_chunks} knowledge chunks
+                template="""Bạn là trợ lý y tế AI chuyên nghiệp của Hội Thầy thuốc trẻ Việt Nam.
 
 TÀI LIỆU THAM KHẢO:
 {context}
@@ -365,19 +240,13 @@ TÀI LIỆU THAM KHẢO:
 CÂU HỎI: {question}
 
 HƯỚNG DẪN TRẢ LỜI:
-- Phân tích TOÀN DIỆN thông tin từ cơ sở dữ liệu y khoa đã được load đầy đủ
-- Tổng hợp kiến thức từ NHIỀU nguồn tài liệu y khoa đáng tin cậy
-- Trả lời chi tiết, chính xác bằng tiếng Việt với cấu trúc rõ ràng
-- Khi có đủ thông tin trong database, hãy đưa ra câu trả lời đầy đủ và có căn cứ
-- Nếu thông tin chưa đầy đủ, nói rõ điều này và đưa ra kiến thức y khoa cơ bản an toàn
-- Luôn khuyến khích tham khảo Thầy thuốc chuyên khoa
+- Trả lời bằng tiếng Việt chính xác, chuyên nghiệp
+- Dựa chủ yếu vào thông tin từ tài liệu được cung cấp
+- Nếu không có thông tin trong tài liệu, nói rõ "Thông tin này chưa có trong tài liệu tham khảo"
+- Đưa ra lời khuyên y tế cẩn trọng và khuyến khích tham khảo Thầy thuốc chuyên khoa
+- Luôn nhắc nhở tầm quan trọng của việc khám bệnh trực tiếp
 
-ĐỊNH DẠNG:
-1. TRẢ LỜI TRỰC TIẾP
-2. GIẢI THÍCH CHI TIẾT
-3. KHUYẾN CÁO Y TẾ
-
-TRẢ LỜI:""".replace("{total_files}", str(len(processed_files))).replace("{total_chunks}", str(total_chunks)),
+TRẢ LỜI:""",
                 input_variables=["context", "question"]
             )
             
@@ -385,58 +254,51 @@ TRẢ LỜI:""".replace("{total_files}", str(len(processed_files))).replace("{to
                 model="gemini-1.5-pro",
                 google_api_key=GOOGLE_API_KEY,
                 temperature=0.2,
-                max_output_tokens=8192
+                max_output_tokens=6144
             )
             
             # Test API
-            test_response = llm.invoke("Test")
-            print(f"   ✅ API test: {test_response.content[:30]}...")
+            print("   Testing API connection...")
+            test_response = llm.invoke("Test connection")
+            print(f"   ✅ API test successful: {test_response.content[:30]}...")
             
             qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 retriever=vector_db.as_retriever(
-                    search_type="mmr",
-                    search_kwargs={
-                        "k": 10,  # More chunks since we have full data
-                        "lambda_mult": 0.7,
-                        "fetch_k": 25
-                    }
+                    search_kwargs={"k": 5}
                 ),
                 chain_type_kwargs={"prompt": prompt},
                 return_source_documents=True
             )
             
-            print("✅ Enhanced QA chain created")
+            print("✅ QA chain created successfully")
             
-        except Exception as e:
-            print(f"❌ AI setup failed: {e}")
-            initialization_status = f"❌ AI error: {str(e)[:50]}..."
+        except Exception as llm_error:
+            print(f"❌ LLM setup failed: {llm_error}")
+            error_msg = str(llm_error).lower()
+            
+            if "api key" in error_msg or "authentication" in error_msg:
+                initialization_status = "❌ API Key authentication failed"
+            elif "quota" in error_msg or "limit" in error_msg:
+                initialization_status = "❌ API quota exceeded"
+            else:
+                initialization_status = f"❌ LLM error: {str(llm_error)[:100]}..."
+            
             return False
         
-        # Final memory cleanup
-        force_garbage_collection()
-        
         # Success!
-        elapsed_time = time.time() - start_time
-        final_memory = get_memory_usage()
+        print("\n" + "=" * 50)
+        print("✅ SYSTEM INITIALIZATION COMPLETED!")
+        print(f"📊 Statistics:")
+        print(f"   • Files: {total_files}")
+        print(f"   • Documents: {len(docs)} pages")
+        print(f"   • Chunks: {total_chunks}")
+        print(f"   • Vector DB: ✅ Ready")
+        print(f"   • AI Model: ✅ Gemini 1.5 Pro")
+        print("=" * 50)
         
-        print("\n" + "=" * 60)
-        print("✅ FULL DATA SYSTEM INITIALIZATION COMPLETED!")
-        print(f"📊 COMPREHENSIVE STATISTICS:")
-        print(f"   • Total files processed: {len(processed_files)}")
-        print(f"   • Total document pages: {total_documents}")
-        print(f"   • Total knowledge chunks: {total_chunks}")
-        print(f"   • Memory usage: {final_memory:.1f}MB")
-        print(f"   • Initialization time: {elapsed_time:.1f}s")
-        print(f"   • Vector DB: ✅ Full data ready")
-        print(f"   • AI Model: ✅ Gemini Pro with 10-chunk retrieval")
-        print(f"   • Coverage: 🎯 100% of uploaded files")
-        print("=" * 60)
-        
-        initialization_status = f"✅ FULL DATA READY! ({len(processed_files)} files, {total_chunks} chunks, {final_memory:.0f}MB)"
+        initialization_status = f"✅ Sẵn sàng! ({total_files} files, {total_chunks} chunks)"
         system_ready = True
-        loading_progress = f"✅ Completed: {len(processed_files)} files processed"
-        
         return True
         
     except Exception as e:
@@ -447,414 +309,720 @@ TRẢ LỜI:""".replace("{total_files}", str(len(processed_files))).replace("{to
         return False
 
 def ask_question(query):
-    """Process questions với full data support"""
+    """Xử lý câu hỏi từ người dùng"""
     global initialization_status, system_ready
     
     if not query or not query.strip():
-        return f"❓ Vui lòng nhập câu hỏi.\n\n📊 Trạng thái: {initialization_status}"
+        return f"❓ Vui lòng nhập câu hỏi.\n\n📊 Trạng thái hệ thống: {initialization_status}"
     
     query = query.strip()
     
-    if len(query) > 2000:
-        return "📝 Câu hỏi quá dài. Vui lòng rút ngắn dưới 2000 ký tự."
+    if len(query) > 1000:
+        return "📝 Câu hỏi quá dài. Vui lòng rút ngắn dưới 1000 ký tự."
     
     if GOOGLE_API_KEY == "dummy":
-        return "🔑 Lỗi API Key - Hệ thống chưa được cấu hình."
+        return """🔑 Lỗi API Key - Hệ thống chưa được cấu hình.
+
+📝 Hướng dẫn khắc phục:
+1. Truy cập Render Dashboard
+2. Vào Settings → Environment  
+3. Thêm biến GOOGLE_API_KEY với giá trị từ Google AI Studio
+4. Redeploy service sau khi cập nhật
+
+💡 Lưu ý: API Key phải bắt đầu bằng 'AIza...'"""
     
     if not system_ready or not qa_chain:
-        return f"""🔧 Hệ thống đang load TOÀN BỘ dữ liệu...
+        return f"""🔧 Hệ thống AI chưa sẵn sàng.
 
-📊 Trạng thái: {initialization_status}
-📁 Tiến độ: {loading_progress}
+📊 Trạng thái hiện tại: {initialization_status}
 
 💡 Thông tin:
-• Đang xử lý TOÀN BỘ files trong thư mục data
-• Thời gian ước tính: 3-8 phút (tùy số lượng file)
-• Hệ thống được tối ưu cho Render Standard (2GB RAM)
+• Thời gian ước tính: 2-5 phút
+• Hệ thống đang load và xử lý tài liệu y tế
+• Vui lòng chờ và thử lại sau
 
-🔄 Vui lòng chờ hệ thống hoàn tất việc load dữ liệu..."""
+🔄 Refresh trang và thử lại sau ít phút..."""
     
     try:
-        print(f"🔍 Processing query with FULL DATA: {query[:100]}...")
+        print(f"🔍 Processing question: {query[:50]}...")
+        
+        if not hasattr(qa_chain, 'invoke'):
+            return "❌ Hệ thống AI chưa được khởi tạo đúng cách. Vui lòng refresh trang và thử lại."
         
         start_time = time.time()
         result = qa_chain.invoke({"query": query})
         processing_time = time.time() - start_time
         
-        answer = result.get("result", "Không thể tạo câu trả lời.")
-        sources = result.get("source_documents", [])
+        print(f"✅ Question processed in {processing_time:.2f}s")
         
-        # Enhanced source tracking
+        answer = result.get("result", "Không thể tạo câu trả lời.")
+        
+        # Add source information
+        sources = result.get("source_documents", [])
         if sources:
-            source_files = {}
+            source_files = set()
             for doc in sources:
                 if "source_file" in doc.metadata:
-                    file_name = doc.metadata["source_file"]
-                    if file_name not in source_files:
-                        source_files[file_name] = 0
-                    source_files[file_name] += 1
+                    source_files.add(doc.metadata["source_file"])
             
             if source_files:
-                answer += f"\n\n📚 **Nguồn tham khảo từ {len(source_files)} files:**\n"
-                for i, (file, count) in enumerate(sorted(source_files.items()), 1):
-                    answer += f"{i}. {file} ({count} references)\n"
+                answer += f"\n\n📚 **Nguồn tài liệu tham khảo:** {', '.join(sorted(source_files))}"
         
-        # Full system statistics
-        current_memory = get_memory_usage()
-        answer += f"\n\n📊 **Thống kê hệ thống FULL DATA:**\n"
-        answer += f"• Files đã load: {len(processed_files)}\n"
-        answer += f"• Tổng chunks: {total_chunks}\n"
-        answer += f"• References tìm được: {len(sources)}\n"
-        answer += f"• Thời gian xử lý: {processing_time:.1f}s\n"
-        answer += f"• Memory usage: {current_memory:.0f}MB\n"
-        answer += f"• Coverage: 🎯 100% data được xử lý"
+        # Add statistics
+        answer += f"\n\n📊 **Thống kê:**"
+        answer += f"\n• Files trong hệ thống: {total_files}"
+        answer += f"\n• Chunks tham khảo: {len(sources)}"
+        answer += f"\n• Thời gian xử lý: {processing_time:.1f}s"
         
-        answer += f"\n\n---\n⚠️ **Lưu ý:** Thông tin từ {len(processed_files)} files y khoa đã được phân tích. Hãy tham khảo Thầy thuốc chuyên khoa để chẩn đoán chính xác. Cấp cứu: 115."
+        # Medical disclaimer
+        answer += f"\n\n---\n⚠️ **Lưu ý quan trọng:** Thông tin trên chỉ mang tính chất tham khảo. Hãy tham khảo Thầy thuốc chuyên khoa để được chẩn đoán và điều trị chính xác. Trong trường hợp cấp cứu, hãy gọi 115."
         
         return answer
         
     except Exception as e:
+        print(f"❌ Query processing error: {e}")
         error_msg = str(e).lower()
         
         if "quota" in error_msg or "limit" in error_msg:
-            return "⚠️ Vượt quá giới hạn API. Vui lòng chờ 1-2 phút và thử lại."
-        elif "memory" in error_msg:
-            return "⚠️ Hệ thống đang quá tải. Vui lòng thử lại sau ít phút."
-        else:
-            return f"❌ Lỗi xử lý: {str(e)[:200]}... Vui lòng thử lại."
+            return """⚠️ Vượt quá giới hạn API.
 
-def create_full_data_interface():
-    """Interface cho full data system"""
+📊 Chi tiết:
+• Google AI Studio có giới hạn requests/phút cho free tier
+• Vui lòng chờ 1-2 phút và thử lại
+• Hoặc nâng cấp lên paid plan để có quota cao hơn
+
+⏰ Thử lại sau: 2-3 phút"""
+            
+        elif "safety" in error_msg:
+            return """⚠️ Câu hỏi chứa nội dung được đánh giá là nhạy cảm.
+
+💡 Khuyến nghị:
+• Diễn đạt lại câu hỏi một cách rõ ràng và trực tiếp hơn
+• Tập trung vào khía cạnh y tế/sức khỏe cụ thể
+• Tránh các từ ngữ có thể gây hiểu lầm
+
+🔄 Vui lòng thử đặt câu hỏi khác."""
+            
+        elif "api" in error_msg or "authentication" in error_msg:
+            return """🔑 Lỗi xác thực API Key.
+
+❌ Nguyên nhân có thể:
+• API Key không đúng định dạng hoặc đã hết hạn
+• Billing account chưa được kích hoạt trong Google Cloud
+• Service bị vô hiệu hóa
+
+🔗 Kiểm tra tại: https://console.cloud.google.com/apis/credentials"""
+            
+        else:
+            return f"""❌ Có lỗi xảy ra khi xử lý câu hỏi.
+
+🔍 Chi tiết lỗi: {str(e)[:200]}
+
+💡 Các bước khắc phục:
+• Thử lại sau vài phút
+• Đặt câu hỏi khác hoặc diễn đạt lại
+• Kiểm tra kết nối internet
+• Liên hệ hỗ trợ nếu lỗi tiếp tục"""
+
+def create_beautiful_interface():
+    """Tạo giao diện đẹp và hiện đại"""
+    
+    # Custom CSS for beautiful interface
+    custom_css = """
+    /* Import Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    
+    /* Global Styles */
+    .gradio-container {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        min-height: 100vh;
+    }
+    
+    /* Header Styles */
+    .main-header {
+        background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #06b6d4 100%);
+        padding: 2rem;
+        border-radius: 1rem;
+        margin: 1rem 0 2rem 0;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .main-header::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+        opacity: 0.3;
+    }
+    
+    .header-content {
+        position: relative;
+        z-index: 1;
+        text-align: center;
+        color: white;
+    }
+    
+    .main-title {
+        font-size: 2.5rem;
+        font-weight: 800;
+        margin: 0;
+        background: linear-gradient(45deg, #ffffff, #e0e7ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        letter-spacing: -0.02em;
+    }
+    
+    .sub-title {
+        font-size: 1.2rem;
+        margin: 0.5rem 0;
+        opacity: 0.9;
+        font-weight: 500;
+    }
+    
+    .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem;
+        margin-top: 1.5rem;
+        padding: 1.5rem;
+        background: rgba(255,255,255,0.1);
+        border-radius: 0.75rem;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+    
+    .feature-item {
+        text-align: center;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        background: rgba(255,255,255,0.1);
+        transition: all 0.3s ease;
+    }
+    
+    .feature-item:hover {
+        background: rgba(255,255,255,0.2);
+        transform: translateY(-2px);
+    }
+    
+    .feature-icon {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+        display: block;
+    }
+    
+    /* Card Styles */
+    .info-card {
+        background: rgba(255,255,255,0.95);
+        backdrop-filter: blur(20px);
+        border-radius: 1rem;
+        padding: 1.5rem;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        border: 1px solid rgba(255,255,255,0.3);
+        margin-bottom: 1rem;
+    }
+    
+    .status-card {
+        background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        border-left: 4px solid #0ea5e9;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
+    
+    .api-status-card {
+        background: linear-gradient(135deg, #fef3c7 0%, #fed7aa 100%);
+        border-left: 4px solid #f59e0b;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
+    
+    /* Input Styles */
+    .gradio-textbox {
+        border-radius: 0.75rem !important;
+        border: 2px solid rgba(59, 130, 246, 0.3) !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    .gradio-textbox:focus {
+        border-color: #3b82f6 !important;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+    }
+    
+    /* Button Styles */
+    .gradio-button {
+        border-radius: 0.75rem !important;
+        font-weight: 600 !important;
+        transition: all 0.3s ease !important;
+        border: none !important;
+    }
+    
+    .gradio-button.primary {
+        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
+        color: white !important;
+    }
+    
+    .gradio-button.primary:hover {
+        background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
+    }
+    
+    /* Stats Grid */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.75rem;
+        margin-top: 1rem;
+    }
+    
+    .stat-item {
+        background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        text-align: center;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        transition: all 0.3s ease;
+    }
+    
+    .stat-item:hover {
+        background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    .stat-number {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #1e40af;
+        display: block;
+    }
+    
+    .stat-label {
+        font-size: 0.75rem;
+        color: #64748b;
+        margin-top: 0.25rem;
+    }
+    
+    /* Footer Styles */
+    .footer-section {
+        background: rgba(255,255,255,0.95);
+        backdrop-filter: blur(20px);
+        border-radius: 1rem;
+        padding: 2rem;
+        margin-top: 2rem;
+        border: 1px solid rgba(255,255,255,0.3);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+    }
+    
+    .warning-box {
+        background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+        border: 2px solid #fca5a5;
+        border-radius: 0.75rem;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        position: relative;
+    }
+    
+    .warning-box::before {
+        content: '⚠️';
+        font-size: 1.5rem;
+        position: absolute;
+        top: 1rem;
+        left: 1rem;
+    }
+    
+    .warning-content {
+        margin-left: 2.5rem;
+        color: #7f1d1d;
+        line-height: 1.6;
+    }
+    
+    /* Responsive Design */
+    @media (max-width: 768px) {
+        .main-title {
+            font-size: 1.8rem;
+        }
+        
+        .feature-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    
+    /* Animation */
+    @keyframes slideInUp {
+        from {
+            opacity: 0;
+            transform: translateY(30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    .animate-slide-up {
+        animation: slideInUp 0.6s ease-out;
+    }
+    """
     
     with gr.Blocks(
-        theme=gr.themes.Soft(),
-        css="""
-        .gradio-container { 
-            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); 
-            font-family: 'Inter', sans-serif;
-        }
-        .custom-header {
-            background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%);
-            color: white;
-            padding: 35px;
-            border-radius: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 12px 40px rgba(29, 78, 216, 0.25);
-        }
-        .info-card {
-            background: white;
-            padding: 25px;
-            border-radius: 15px;
-            box-shadow: 0 6px 20px rgba(0,0,0,0.08);
-            border-left: 5px solid #1d4ed8;
-            margin-bottom: 20px;
-        }
-        """,
-        title="🏥 Full Data Medical AI - Hội Thầy thuốc trẻ Việt Nam"
+        theme=gr.themes.Soft(
+            primary_hue="blue",
+            secondary_hue="sky",
+            neutral_hue="slate",
+            font=gr.themes.GoogleFont("Inter")
+        ),
+        css=custom_css,
+        title="🏥 Hội Thầy thuốc trẻ Việt Nam - AI Medical Assistant"
     ) as interface:
         
-        # HEADER
-        gr.HTML("""
-        <div class="custom-header">
-            <div style="text-align: center;">
-                <h1 style="margin: 0; font-size: 36px; font-weight: 800; color: white;">
-                    🏥 FULL DATA MEDICAL AI
+        # BEAUTIFUL HEADER
+        gr.HTML(f"""
+        <div class="main-header animate-slide-up">
+            <div class="header-content">
+                <h1 class="main-title">
+                    🏥 HỘI THẦY THUỐC TRẺ VIỆT NAM
                 </h1>
-                <p style="margin: 10px 0 0 0; font-size: 20px; color: white; opacity: 0.95;">
-                    🚀 Load 100% Files - Optimized for Render Standard
+                <p class="sub-title">
+                    🤖 Trợ lý Y tế AI - Tư vấn sức khỏe thông minh 24/7
                 </p>
-                <p style="margin: 8px 0 0 0; font-size: 16px; color: white; opacity: 0.9;">
-                    Hội Thầy thuốc trẻ Việt Nam
+                <p style="opacity: 0.8; margin: 0;">
+                    Được phát triển bởi các Thầy thuốc trẻ Việt Nam
                 </p>
-            </div>
-            
-            <div style="background: rgba(255,255,255,0.15); padding: 20px; border-radius: 15px; margin-top: 20px;">
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; text-align: center;">
-                    <div>
-                        <div style="font-size: 24px; margin-bottom: 5px;">📁</div>
-                        <strong style="color: white;">Full Coverage</strong><br>
-                        <span style="color: #34d399;">100% Files Loaded</span>
+                
+                <div class="feature-grid">
+                    <div class="feature-item">
+                        <span class="feature-icon">🌐</span>
+                        <strong>Website chính thức</strong><br>
+                        <a href="https://thaythuoctre.vn" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600;">
+                            thaythuoctre.vn
+                        </a>
                     </div>
-                    <div>
-                        <div style="font-size: 24px; margin-bottom: 5px;">💾</div>
-                        <strong style="color: white;">Memory Optimized</strong><br>
-                        <span style="color: #fbbf24;">2GB RAM Efficient</span>
+                    <div class="feature-item">
+                        <span class="feature-icon">🤖</span>
+                        <strong>AI Technology</strong><br>
+                        <span style="color: #34d399; font-weight: 600;">Google Gemini Pro</span>
                     </div>
-                    <div>
-                        <div style="font-size: 24px; margin-bottom: 5px;">⚡</div>
-                        <strong style="color: white;">Smart Processing</strong><br>
-                        <span style="color: #f87171;">Batch + Progressive</span>
+                    <div class="feature-item">
+                        <span class="feature-icon">📚</span>
+                        <strong>Data Coverage</strong><br>
+                        <span style="color: #f87171; font-weight: 600;">{total_files} Files Ready</span>
                     </div>
                 </div>
             </div>
         </div>
         """)
         
+        # MAIN CONTENT AREA
         with gr.Row():
             with gr.Column(scale=2):
+                # INPUT SECTION
+                gr.HTML("""
+                <div class="info-card animate-slide-up">
+                    <h3 style="color: #1e40af; margin: 0 0 1rem 0; font-size: 1.5rem; font-weight: 700;">
+                        💬 Đặt câu hỏi y tế
+                    </h3>
+                    <p style="color: #64748b; margin: 0; line-height: 1.5;">
+                        Hãy mô tả chi tiết triệu chứng hoặc vấn đề sức khỏe để nhận được tư vấn chính xác nhất từ AI.
+                    </p>
+                </div>
+                """)
+                
                 question_input = gr.Textbox(
                     lines=5,
-                    placeholder="💬 Với cơ sở dữ liệu y khoa TOÀN DIỆN, hãy hỏi chi tiết về: bệnh lý, thuốc men, chẩn đoán, điều trị, phòng ngừa...",
-                    label="🩺 Câu hỏi y tế (Full Data Support)",
+                    placeholder="💬 Ví dụ: 'Tôi bị đau đầu kèm sốt nhẹ, có triệu chứng ho khan. Đây có thể là bệnh gì và cần làm gì?'",
+                    label="🩺 Câu hỏi y tế của bạn",
                     max_lines=8,
-                    info="Hệ thống đã load TOÀN BỘ files - bạn có thể hỏi về bất kỳ chủ đề y tế nào."
+                    show_label=True,
+                    elem_classes=["question-input"]
                 )
                 
                 with gr.Row():
-                    submit_btn = gr.Button("🔍 Tư vấn Full Data AI", variant="primary", size="lg", scale=2)
-                    clear_btn = gr.Button("🗑️ Xóa", variant="secondary", scale=1)
+                    submit_btn = gr.Button(
+                        "🔍 Tư vấn với AI Doctor", 
+                        variant="primary", 
+                        size="lg",
+                        scale=2,
+                        elem_classes=["submit-button"]
+                    )
+                    clear_btn = gr.Button(
+                        "🗑️ Xóa", 
+                        variant="secondary", 
+                        scale=1,
+                        elem_classes=["clear-button"]
+                    )
             
             with gr.Column(scale=1):
+                # STATUS PANEL
                 gr.HTML(f"""
-                <div class="info-card">
-                    <h3 style="color: #1e40af; margin: 0 0 15px 0;">🚀 Full Data System</h3>
-                    
-                    <div style="margin-bottom: 15px;">
-                        <strong style="color: #1e40af;">📊 Capacity:</strong><br>
-                        <span style="color: #059669; font-size: 14px;">
-                            • Target: 100 files, 300MB<br>
-                            • Memory limit: 1.6GB<br>
-                            • Batch processing: ✅<br>
-                            • Progressive loading: ✅
-                        </span>
+                <div class="info-card animate-slide-up">
+                    <div style="text-align: center; margin-bottom: 1.5rem;">
+                        <div style="width: 60px; height: 60px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 1rem; font-size: 1.5rem; color: white; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);">
+                            🏥
+                        </div>
+                        <h3 style="color: #1e40af; margin: 0; font-size: 1.25rem; font-weight: 700;">
+                            System Status
+                        </h3>
                     </div>
                     
-                    <div style="background: #f1f5f9; padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                        <strong style="color: #1e40af;">📊 Status:</strong><br>
-                        <span style="color: #059669; font-weight: 600; font-size: 14px;">
+                    <div class="status-card">
+                        <strong style="color: #0c4a6e;">📊 Trạng thái hệ thống:</strong><br>
+                        <span style="color: #059669; font-weight: 600; font-size: 0.9rem;">
                             {initialization_status}
                         </span>
                     </div>
                     
-                    <div style="background: #fef3c7; padding: 12px; border-radius: 8px;">
-                        <strong style="color: #92400e;">⚡ Progress:</strong><br>
-                        <span style="color: #78350f; font-weight: 600; font-size: 14px;">
-                            {loading_progress}
+                    <div class="api-status-card">
+                        <strong style="color: #92400e;">🔑 API Status:</strong><br>
+                        <span style="color: #78350f; font-weight: 600; font-size: 0.9rem;">
+                            {"✅ Connected & Ready" if GOOGLE_API_KEY != "dummy" else "❌ Not configured"}
                         </span>
+                    </div>
+                    
+                    <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #22c55e; margin-top: 1rem;">
+                        <strong style="color: #14532d;">💡 Hướng dẫn sử dụng:</strong><br>
+                        <ul style="color: #166534; font-size: 0.85rem; margin: 0.5rem 0 0 0; padding-left: 1rem; line-height: 1.4;">
+                            <li>Mô tả triệu chứng chi tiết</li>
+                            <li>Đề cập thời gian xuất hiện</li>
+                            <li>Nêu độ tuổi và giới tính</li>
+                            <li>Kể cả tiền sử bệnh (nếu có)</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-number">24/7</span>
+                            <span class="stat-label">Hỗ trợ</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number">AI</span>
+                            <span class="stat-label">Thông minh</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number">VN</span>
+                            <span class="stat-label">Tiếng Việt</span>
+                        </div>
                     </div>
                 </div>
                 """)
         
-        answer_output = gr.Textbox(
-            lines=18,
-            label="🩺 Tư vấn từ Full Data AI System",
-            show_copy_button=True,
-            interactive=False,
-            placeholder="Câu trả lời toàn diện từ hệ thống đã load 100% dữ liệu sẽ hiển thị ở đây...",
-            info="Hệ thống phân tích từ TOÀN BỘ files đã upload với độ chính xác cao nhất."
-        )
-        
-        # ENHANCED EXAMPLES for Full Data
-        gr.Examples(
-            examples=[
-                "Phân tích toàn diện về bệnh tiểu đường type 2: nguyên nhân, triệu chứng, chẩn đoán, điều trị và biến chứng",
-                "Hướng dẫn chi tiết về cao huyết áp: phân loại, yếu tố nguy cơ, điều trị không dùng thuốc và dùng thuốc",
-                "Thuốc kháng sinh: phân loại, cơ chế tác dụng, nguyên tắc sử dụng và tình trạng kháng thuốc",
-                "Bệnh tim mạch: các loại bệnh, yếu tố nguy cơ, phòng ngừa và quản lý toàn diện",
-                "Sơ cứu cấp cứu: xử lý đột quỵ, nhồi máu cơ tim, sốc phản vệ và các tình huống nguy hiểm",
-                "Vaccine và miễn dịch: lịch tiêm chủng, hiệu quả vaccine, tác dụng phụ và chống chỉ định",
-                "Bệnh truyền nhiễm: HIV/AIDS, viêm gan B/C, lao phổi - chẩn đoán và điều trị hiện đại",
-                "Sức khỏe tâm thần: trầm cảm, lo âu, rối loạn lưỡng cực - nhận biết và can thiệp",
-                "Dinh dưỡng lâm sàng: đánh giá tình trạng dinh dưỡng, can thiệp dinh dưỡng đặc biệt",
-                "Bệnh lý phụ khoa: rối loạn kinh nguyệt, nhiễm trùng, u nang buồng trứng",
-                "Nhi khoa: phát triển trẻ em, bệnh thường gặp, lịch khám sức khỏe định kỳ",
-                "Lão khoa: các hội chứng lão hóa, đa bệnh lý, chăm sóc người cao tuổi",
-                "Ung thư: sàng lọc, chẩn đoán sớm, điều trị đa mô thức và chăm sóc giảm nhẹ",
-                "Cấp cứu y khoa: đánh giá ban đầu, phân loại mức độ khẩn cấp, xử lý đa chấn thương",
-                "Y học dự phòng: sàng lọc bệnh, tiêm chủng, giáo dục sức khỏe cộng đồng"
-            ],
-            inputs=question_input,
-            label="💡 Câu hỏi mẫu cho Full Data System - Test toàn diện",
-            examples_per_page=10
-        )
-        
-        # SYSTEM MONITORING SECTION
+        # OUTPUT SECTION
         gr.HTML("""
-        <div style="background: white; padding: 20px; border-radius: 15px; margin-top: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
-            <h4 style="color: #1e40af; margin: 0 0 15px 0;">📊 Full Data System Monitoring</h4>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
-                <div style="background: #f8fafc; padding: 15px; border-radius: 10px; border-left: 4px solid #059669;">
-                    <strong style="color: #059669;">✅ Data Coverage</strong><br>
-                    <span style="color: #64748b; font-size: 14px;">
-                        • 100% files trong thư mục data<br>
-                        • Intelligent page sampling<br>
-                        • Progressive chunk creation<br>
-                        • Memory-optimized processing
-                    </span>
-                </div>
-                <div style="background: #f8fafc; padding: 15px; border-radius: 10px; border-left: 4px solid #dc2626;">
-                    <strong style="color: #dc2626;">🎯 Performance Optimizations</strong><br>
-                    <span style="color: #64748b; font-size: 14px;">
-                        • Batch loading (3 files/batch)<br>
-                        • Progressive vector DB creation<br>
-                        • Memory monitoring & GC<br>
-                        • 1.6GB RAM limit protection
-                    </span>
-                </div>
-                <div style="background: #f8fafc; padding: 15px; border-radius: 10px; border-left: 4px solid #1d4ed8;">
-                    <strong style="color: #1d4ed8;">🚀 Enhanced Retrieval</strong><br>
-                    <span style="color: #64748b; font-size: 14px;">
-                        • MMR algorithm với 10 chunks<br>
-                        • 25 candidate expansion<br>
-                        • Source file tracking<br>
-                        • Comprehensive statistics
-                    </span>
-                </div>
-            </div>
+        <div class="info-card animate-slide-up" style="margin-top: 2rem;">
+            <h3 style="color: #1e40af; margin: 0 0 1rem 0; font-size: 1.5rem; font-weight: 700;">
+                🩺 Tư vấn từ AI Doctor
+            </h3>
+            <p style="color: #64748b; margin: 0; line-height: 1.5;">
+                Câu trả lời chi tiết và chuyên nghiệp từ hệ thống AI y tế sẽ hiển thị ở đây.
+            </p>
         </div>
         """)
         
-        # PROFESSIONAL FOOTER với Full Data Info
+        answer_output = gr.Textbox(
+            lines=15,
+            label="",
+            show_copy_button=True,
+            interactive=False,
+            placeholder="🔄 Đang chờ câu hỏi từ bạn...\n\n💡 Mẹo: Hãy mô tả triệu chứng càng chi tiết càng tốt để nhận được tư vấn chính xác nhất.",
+            show_label=False,
+            elem_classes=["answer-output"]
+        )
+        
+        # ENHANCED EXAMPLES SECTION
         gr.HTML("""
-        <div style="background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); padding: 30px; border-radius: 20px; margin-top: 30px; border-top: 4px solid #1d4ed8; text-align: center;">
-            <div style="margin-bottom: 25px;">
-                <h4 style="margin: 0; color: #1e40af; font-size: 24px; font-weight: 700;">
-                    🏥 Full Data Medical AI System
-                </h4>
-                <p style="margin: 5px 0 0 0; color: #64748b; font-size: 16px;">
-                    Hội Thầy thuốc trẻ Việt Nam - Comprehensive Healthcare AI
-                </p>
-            </div>
-            
-            <!-- Technical Specifications -->
-            <div style="background: white; padding: 25px; border-radius: 15px; margin-bottom: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
-                <h5 style="color: #1e40af; margin: 0 0 20px 0; font-size: 18px; font-weight: 600;">
-                    🔧 Technical Specifications for 100 Files / 300MB
-                </h5>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; text-align: left;">
-                    <div style="background: #f1f5f9; padding: 15px; border-radius: 10px;">
-                        <strong style="color: #1e40af;">📁 Data Processing:</strong><br>
-                        <span style="color: #64748b; font-size: 14px;">
-                            • Target: 100 files, 300MB total<br>
-                            • Batch loading: 3 files per batch<br>
-                            • Smart page sampling:<br>
-                            &nbsp;&nbsp;- Small files (≤10 pages): All pages<br>
-                            &nbsp;&nbsp;- Medium files (≤50 pages): Every 2nd page<br>
-                            &nbsp;&nbsp;- Large files (>50 pages): First 10 + Middle 20 + Last 10<br>
-                            • Progressive chunking với memory protection
-                        </span>
+        <div class="info-card animate-slide-up" style="margin-top: 1.5rem;">
+            <h3 style="color: #1e40af; margin: 0 0 1rem 0; font-size: 1.25rem; font-weight: 700;">
+                💡 Câu hỏi mẫu - Click để thử ngay
+            </h3>
+            <p style="color: #64748b; margin: 0; line-height: 1.5; font-size: 0.9rem;">
+                Chọn một trong những câu hỏi dưới đây để test khả năng của AI Doctor
+            </p>
+        </div>
+        """)
+        
+        gr.Examples(
+            examples=[
+                "Tôi bị đau đầu kèm sốt nhẹ 37.5°C, có triệu chứng ho khan và mệt mỏi. Đây có thể là bệnh gì?",
+                "Người tiểu đường type 2 nên ăn gì và tránh gì? Có thể tập thể dục không?",
+                "Thuốc paracetamol uống như thế nào cho đúng? Có tác dụng phụ gì không?",
+                "Trẻ 3 tuổi bị sốt cao 39°C, co giật. Cần xử lý cấp cứu như thế nào?",
+                "Cách nhận biết dấu hiệu đột quỵ? Sơ cứu ban đầu làm gì?",
+                "Phụ nữ mang thai nên tiêm vaccine gì? COVID-19 vaccine có an toàn không?",
+                "Bị viêm gan B có thể lây nhiễm qua đường nào? Cách phòng ngừa?",
+                "Dấu hiệu trầm cảm ở người trẻ? Khi nào cần đi khám bác sĩ?",
+                "Nguyên tắc sử dụng kháng sinh: khi nào dùng, dùng bao lâu?",
+                "Bị ngộ độc thực phẩm: triệu chứng và cách xử lý tại nhà?",
+                "Chăm sóc da mặt bị mụn trứng cá: nguyên nhân và cách điều trị?",
+                "Cao huyết áp ở người trẻ: nguyên nhân, triệu chứng và cách kiểm soát?"
+            ],
+            inputs=question_input,
+            label="",
+            examples_per_page=6
+        )
+        
+        # BEAUTIFUL FOOTER
+        gr.HTML("""
+        <div class="footer-section animate-slide-up">
+            <div style="text-align: center; margin-bottom: 2rem;">
+                <div style="display: inline-flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                    <div style="width: 50px; height: 50px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; color: white; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);">
+                        🏥
                     </div>
-                    <div style="background: #f0fdf4; padding: 15px; border-radius: 10px;">
-                        <strong style="color: #059669;">💾 Memory Management:</strong><br>
-                        <span style="color: #64748b; font-size: 14px;">
-                            • Render Standard: 2GB RAM<br>
-                            • Safe limit: 1.6GB usage<br>
-                            • Auto garbage collection<br>
-                            • Memory monitoring per batch<br>
-                            • Progressive vector DB creation<br>
-                            • Adaptive chunk sizing based on file count
-                        </span>
-                    </div>
-                    <div style="background: #fef3c7; padding: 15px; border-radius: 10px;">
-                        <strong style="color: #92400e;">⚡ Performance Features:</strong><br>
-                        <span style="color: #64748b; font-size: 14px;">
-                            • MMR retrieval với 10 chunks<br>
-                            • 25 candidate expansion<br>
-                            • Batch vector processing<br>
-                            • Enhanced source tracking<br>
-                            • Comprehensive statistics<br>
-                            • 8K token output capacity
-                        </span>
+                    <div style="text-align: left;">
+                        <h4 style="margin: 0; color: #1e40af; font-size: 1.5rem; font-weight: 700;">
+                            Hội Thầy thuốc trẻ Việt Nam
+                        </h4>
+                        <p style="margin: 0; color: #64748b; font-size: 1rem;">
+                            Vietnam Young Physicians' Association
+                        </p>
                     </div>
                 </div>
             </div>
             
-            <!-- Usage Recommendations -->
-            <div style="background: white; padding: 20px; border-radius: 15px; margin-bottom: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
-                <h5 style="color: #1e40af; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">
-                    📋 Khuyến nghị sử dụng với 100 files
+            <!-- System Information -->
+            <div style="background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); padding: 1.5rem; border-radius: 1rem; margin-bottom: 1.5rem; border: 1px solid rgba(148, 163, 184, 0.2);">
+                <h5 style="color: #1e40af; margin: 0 0 1rem 0; font-size: 1.25rem; font-weight: 600; text-align: center;">
+                    🔧 Thông tin hệ thống
                 </h5>
-                <div style="text-align: left; color: #64748b; line-height: 1.6;">
-                    <p style="margin: 10px 0;"><strong>✅ Tối ưu:</strong> Upload files PDF có cấu trúc tốt, text rõ ràng, ít hình ảnh</p>
-                    <p style="margin: 10px 0;"><strong>⚡ Performance:</strong> Thời gian khởi tạo: 3-8 phút tùy số lượng và kích thước files</p>
-                    <p style="margin: 10px 0;"><strong>💾 Memory:</strong> Hệ thống tự động điều chỉnh batch size và chunk size theo tải</p>
-                    <p style="margin: 10px 0;"><strong>🔄 Restart:</strong> Nếu gặp lỗi memory, hệ thống sẽ tự động restart với cấu hình an toàn hơn</p>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+                    <div style="background: white; padding: 1rem; border-radius: 0.5rem; border: 1px solid rgba(59, 130, 246, 0.2);">
+                        <strong style="color: #1e40af;">📊 Data Processing:</strong><br>
+                        <span style="color: #64748b; font-size: 0.9rem; line-height: 1.4;">
+                            • Auto-detect all PDF files<br>
+                            • Smart page sampling<br>
+                            • Optimized chunking<br>
+                            • Vector database ready
+                        </span>
+                    </div>
+                    <div style="background: white; padding: 1rem; border-radius: 0.5rem; border: 1px solid rgba(34, 197, 94, 0.2);">
+                        <strong style="color: #059669;">🤖 AI Features:</strong><br>
+                        <span style="color: #64748b; font-size: 0.9rem; line-height: 1.4;">
+                            • Google Gemini 1.5 Pro<br>
+                            • Vietnamese language optimized<br>
+                            • Medical knowledge base<br>
+                            • Source document tracking
+                        </span>
+                    </div>
+                    <div style="background: white; padding: 1rem; border-radius: 0.5rem; border: 1px solid rgba(245, 158, 11, 0.2);">
+                        <strong style="color: #d97706;">⚡ Performance:</strong><br>
+                        <span style="color: #64748b; font-size: 0.9rem; line-height: 1.4;">
+                            • Real-time responses<br>
+                            • Timeout protection<br>
+                            • Emergency fallback<br>
+                            • Memory optimization
+                        </span>
+                    </div>
                 </div>
             </div>
             
             <!-- Medical Disclaimer -->
-            <div style="background: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
-                <p style="color: #dc2626; margin: 0; font-weight: 600; font-size: 16px;">
-                    ⚠️ LƯU Ý Y KHOA QUAN TRỌNG
-                </p>
-                <p style="color: #64748b; margin: 10px 0 0 0; line-height: 1.6;">
-                    Hệ thống Full Data AI này phân tích thông tin từ <strong>toàn bộ tài liệu y khoa</strong> đã upload, 
-                    nhưng chỉ mang tính chất <strong>tham khảo</strong> và <strong>hỗ trợ</strong>.<br>
-                    <strong style="color: #dc2626;">KHÔNG thay thế</strong> cho việc khám bệnh, chẩn đoán và điều trị trực tiếp từ Thầy thuốc.<br>
-                    <strong>Cấp cứu y tế: Gọi 115</strong> | <strong>Tham khảo Thầy thuốc chuyên khoa</strong> cho mọi vấn đề sức khỏe.
-                </p>
+            <div class="warning-box">
+                <div class="warning-content">
+                    <h5 style="color: #7f1d1d; margin: 0 0 0.5rem 0; font-size: 1.1rem; font-weight: 600;">
+                        LƯU Ý Y KHOA QUAN TRỌNG
+                    </h5>
+                    <p style="margin: 0; line-height: 1.6;">
+                        Thông tin tư vấn từ AI chỉ mang tính chất <strong>tham khảo</strong> và <strong>không thay thế</strong> 
+                        cho việc khám bệnh, chẩn đoán và điều trị trực tiếp từ Thầy thuốc chuyên khoa.
+                    </p>
+                    <p style="margin: 0.5rem 0 0 0; line-height: 1.6;">
+                        <strong>🏥 Hãy đến cơ sở y tế gần nhất</strong> khi có triệu chứng bất thường hoặc cần hỗ trợ y tế khẩn cấp.<br>
+                        <strong>📞 Số điện thoại cấp cứu: 115</strong>
+                    </p>
+                </div>
             </div>
             
             <!-- Footer Links -->
-            <div style="border-top: 1px solid #e2e8f0; padding-top: 20px; color: #94a3b8; font-size: 13px;">
-                <p style="margin: 5px 0;">
-                    🔒 Full Data Security | 🚀 Render Standard Optimized | 🧠 100% Coverage | 🇻🇳 Made in Vietnam
-                </p>
-                <p style="margin: 5px 0;">
-                    © 2024 Hội Thầy thuốc trẻ Việt Nam. Full Data Medical AI System v3.0
-                </p>
-                <p style="margin: 10px 0 0 0;">
-                    <a href="https://thaythuoctre.vn" target="_blank" style="color: #1d4ed8; text-decoration: none;">
+            <div style="border-top: 2px solid rgba(148, 163, 184, 0.2); padding-top: 1.5rem; text-align: center;">
+                <div style="display: flex; justify-content: center; gap: 2rem; flex-wrap: wrap; margin-bottom: 1rem;">
+                    <a href="https://thaythuoctre.vn" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
                         🌐 Website chính thức
-                    </a> | 
-                    <a href="mailto:info@thaythuoctre.vn" style="color: #1d4ed8; text-decoration: none;">
-                        📧 Hỗ trợ kỹ thuật
                     </a>
-                </p>
+                    <a href="mailto:info@thaythuoctre.vn" style="color: #3b82f6; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                        📧 Liên hệ hỗ trợ
+                    </a>
+                </div>
+                <div style="color: #94a3b8; font-size: 0.9rem; line-height: 1.5;">
+                    <p style="margin: 0;">
+                        🔒 Bảo mật dữ liệu | 🚀 Powered by Google Gemini AI | 🧠 Smart Medical Assistant | 🇻🇳 Made in Vietnam
+                    </p>
+                    <p style="margin: 0.5rem 0 0 0;">
+                        © 2024 Hội Thầy thuốc trẻ Việt Nam. AI Medical Assistant v4.0
+                    </p>
+                </div>
             </div>
         </div>
         """)
         
         # EVENT HANDLERS
-        submit_btn.click(ask_question, inputs=question_input, outputs=answer_output)
-        question_input.submit(ask_question, inputs=question_input, outputs=answer_output)
-        clear_btn.click(lambda: ("", ""), outputs=[question_input, answer_output])
+        submit_btn.click(
+            fn=ask_question, 
+            inputs=question_input, 
+            outputs=answer_output,
+            show_progress=True
+        )
+        question_input.submit(
+            fn=ask_question, 
+            inputs=question_input, 
+            outputs=answer_output,
+            show_progress=True
+        )
+        clear_btn.click(
+            fn=lambda: ("", ""), 
+            outputs=[question_input, answer_output]
+        )
     
     return interface
 
-# Create full data interface
-print("🎨 Creating Full Data Medical AI interface...")
-interface = create_full_data_interface()
+# Create beautiful interface
+print("🎨 Creating beautiful modern interface...")
+interface = create_beautiful_interface()
 
 # Main execution
 if __name__ == "__main__":
-    print("\n" + "=" * 70)
-    print("🚀 LAUNCHING FULL DATA MEDICAL AI FOR HỘI THẦY THUỐC TRẺ VIỆT NAM")
-    print("=" * 70)
+    print("\n" + "=" * 60)
+    print("🚀 LAUNCHING BEAUTIFUL MEDICAL AI")
+    print("=" * 60)
     print(f"📡 Server: 0.0.0.0:{port}")
     print(f"🔑 API Key: {'✅ Configured' if GOOGLE_API_KEY != 'dummy' else '❌ Missing'}")
-    print(f"💾 Target: 100 files, 300MB total")
-    print(f"💻 Hardware: Render Standard (1 CPU, 2GB RAM)")
-    print(f"🎯 Coverage: 100% of uploaded files")
-    print(f"⚡ Optimizations:")
-    print(f"   • Batch loading (3 files/batch)")
-    print(f"   • Progressive vector DB creation")
-    print(f"   • Memory monitoring & garbage collection")
-    print(f"   • Intelligent page sampling")
-    print(f"   • 1.6GB RAM safe limit")
-    print("=" * 70)
+    print(f"🎨 Interface: Beautiful Modern Design")
+    print(f"🤖 AI Model: Google Gemini 1.5 Pro")
+    print(f"⚡ Features: Responsive + Animated + Professional")
+    print("=" * 60)
     
-    # Start full data initialization
-    print("🔥 Starting FULL DATA initialization...")
-    print("📊 This will process ALL files in the data folder")
-    print("⏱️ Estimated time: 3-8 minutes depending on file count and sizes")
-    
+    # Start initialization
+    print("🔥 Starting system initialization...")
     init_thread = threading.Thread(target=initialize_system, daemon=True)
     init_thread.start()
     
-    # Small delay for thread to start
-    time.sleep(1.0)
+    time.sleep(0.5)
     
     # Launch interface
     try:
-        print("🌟 Launching Full Data Medical AI interface...")
+        print("🌟 Launching beautiful interface...")
         interface.launch(
             server_name="0.0.0.0",
             server_port=port,
             share=False,
             show_error=True,
             show_api=False,
-            quiet=False
+            quiet=False,
+            favicon_path=None,
+            app_kwargs={"docs_url": None, "redoc_url": None}
         )
         
     except Exception as e:
@@ -869,17 +1037,4 @@ if __name__ == "__main__":
         except Exception as e2:
             print(f"❌ Fallback launch failed: {e2}")
             print("💔 Unable to start server. Check configuration and try again.")
-            
-            # Emergency mode: Try with reduced functionality
-            print("🚨 Attempting emergency mode with reduced data loading...")
-            # Reset some global variables for emergency mode
-            initialization_status = "🚨 Emergency mode - reduced data loading"
-            try:
-                interface.launch(
-                    server_name="0.0.0.0",
-                    server_port=port,
-                    debug=True
-                )
-            except Exception as e3:
-                print(f"❌ Emergency mode also failed: {e3}")
-                sys.exit(1)
+            sys.exit(1)
